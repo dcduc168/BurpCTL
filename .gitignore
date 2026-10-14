@@ -1,6 +1,22 @@
-cli/target/
-extension/.gradle/
-extension/build/
+# Private agent instructions and local tool configuration
+AGENTS.md
+mise.toml
+mise.local.toml
+.mise.toml
+.mise.local.toml
+.codex/
+.agents/
+.env
+.env.*
+!.env.example
+
+# Build output and caches
+/cli/target/
+/extension/build/
 .gradle/
+__pycache__/
+*.pyc
+
+# Incomplete exports and local release archives
 *.part
-BurpCTL-*.zip
+/BurpCTL-*.zip
