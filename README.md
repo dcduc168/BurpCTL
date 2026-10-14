@@ -29,7 +29,7 @@ rustup target add x86_64-pc-windows-msvc
 cargo xwin build --manifest-path cli/Cargo.toml --target x86_64-pc-windows-msvc --release --locked
 ```
 
-The CLI is `cli/target/x86_64-pc-windows-msvc/release/burpctl.exe`; the extension is `extension/build/libs/burpctl-extension.jar`. Package matching artifacts without publishing:
+The CLI is `cli/target/x86_64-pc-windows-msvc/release/burpctl.exe`; the extension is `extension/build/libs/burpctl-extension.jar`. Package matching artifacts using Python 3.11+ on Windows or WSL with Windows interop. Packaging checks the CLI's `--version` and the JAR's build version, rejects stale artifacts, and removes its incomplete archive on failure:
 
 ```sh
 python3 scripts/package-release.py --output BurpCTL-0.1.0.zip
@@ -83,5 +83,11 @@ The repository [Agent Skill](skills/burpctl/SKILL.md) documents discovery and sc
 Checked on Windows 11 with Burp Professional 2026.10-54643 and its bundled Java 26.0.2, using Java 21 bytecode: native Rust/Java UDS, authentication and ACLs, denied permissions, scoped reads, projection, instance ambiguity, unload cleanup and incomplete-export cleanup. An authorized 100-message loopback corpus passed 200 exact request/response body comparisons and 100 Base64-prefix comparisons. Cargo fmt/check/clippy, including Windows-target clippy, and Gradle build passed. These checks preceded Git initialization.
 
 Standalone Java and PowerShell checks live in `verification/`. Compile the Java fixtures against the extension JAR and Montoya 2026.7 JAR with `javac --release 21 -d CLASSES -cp CLASSPATH`; run `StatusSmoke` and `HistorySmoke` with both JARs and the compiled classes on the classpath. `PerfSnapshot` uses an internal JVM API and instead needs `-source 21 -target 21 --add-exports jdk.internal.jvmstat/sun.jvmstat.monitor=ALL-UNNAMED` at compilation and the same export at runtime. PowerShell scripts take explicit Java, classpath and CLI paths. Only run `TrafficFixture populate` with explicit traffic authorization and its loopback URL in Burp scope; the read CLI never sends fixture traffic or changes scope.
+
+Focused audit regressions: `cargo test --manifest-path cli/Cargo.toml --locked` checks invalid response/export variants; `python3 verification/release-checks.py` checks golden bytes, stale artifacts and archive cleanup; `python3 verification/token-checks.py` checks fixture selection without reading Burp data. `windows-corpus.ps1 -Java JAVA_EXE -Classes CLASSES` rejects duplicate corpus entries using a temporary CLI fixture. These checks send no target traffic. Actual corpus verification requires distinct history IDs and complete fixture indices 0–99; duplicate or missing samples fail the gate. Token benchmarks resolve `/fixture/0` from scoped host/path filters and fail if its reference is missing, ambiguous or stale.
+
+For an IPC-only corpus run, start `HistoryServer` with both JARs and fixture classes on its classpath; it exposes the synthetic bytes through the production server and stops on stdin input. Run `windows-history.ps1 -Java JAVA_EXE -Classes CLASSES -Cli CLI_EXE -Instance FIXTURE_INSTANCE` using its explicit ID from discovery. This checks the complete native CLI/export path without contacting targets. It supplements real Burp integration; it does not verify Montoya backend allocations or wire representations.
+
+Token measurements require `tiktoken` 0.12.0: `uv run --with tiktoken==0.12.0 python verification/output-tokens.py CLI_EXE --instance FIXTURE_INSTANCE`. Run only against the synthetic corpus.
 
 The tested history had only about 101 synthetic entries. A five-minute idle sample had uncontrolled ambient activity and GC, so no causal extension heap/RSS overhead or large-history allocation bound was established. Additional open checks include Community edition, Windows Java 21, multiple real Burp windows, live HTTP/2/gzip, repeated real extension reloads, abrupt JVM crash recovery and adversarial Windows path races. Fixture checks do not establish those integrations.

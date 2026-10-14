@@ -242,6 +242,8 @@ Java connection deadline is 30 seconds, history callback deadline 20 seconds, ov
 
 Raw opening/end controls include protocol version and request ID. The client rejects extra frames, wrong count/hash, EOF or stream error, and cleans `.part` files on failure. Exports do not overwrite without `--force`; no export path is sent to Java. Tiny ephemeral rendezvous files are the only production writes without an explicit export.
 
+The client validates exclusive response variants: a normal success requires an object result and completion metadata, an error requires code/message/retryable, and a raw export success requires an opening stream followed by verified bytes and a terminal control. A normal success cannot complete a requested raw export. Extension status and tab name use the JAR's `Implementation-Version` build metadata; source-classpath development runs report `development`.
+
 ## 9. Protocol change discipline
 
 - Freeze v1 envelope and basic codes once Rust↔Java interoperability is demonstrated. Use `minor` additive changes only; fields never silently change semantics.
