@@ -1,2 +1,2 @@
-{"version":{"major":1,"minor":0},"id":"golden-3","ok":true,"stream":{"kind":"raw_bytes","size_bytes":3,"chunk_max":65536,"source":"montoya_response_body"}}
+{"version":{"major":1,"minor":0},"id":"golden-3","ok":true,"stream":{"kind":"raw_bytes","size_bytes":3,"chunk_max":65536,"source":"montoya_response_body"},"meta":{"provenance":{"instance_id":"11111111111111111111111111111111","project_id":"example-project","history_id":123},"representation":"response.body","transformation":"none"}}
 {"version":{"major":1,"minor":0},"id":"golden-3","stream_end":{"bytes_sent":3,"sha256":"41929072d6e0de223f7557a6dc78992687d694ad713845834984cdd38adc6698","complete":true}}
