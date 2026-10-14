@@ -11,6 +11,8 @@ for ($index = 0; $index -lt $Samples; $index++) {
     $heap = & $Java --add-exports jdk.internal.jvmstat/sun.jvmstat.monitor=ALL-UNNAMED -cp $Classes PerfSnapshot $BurpPid | ConvertFrom-Json
     if ($LASTEXITCODE -ne 0) { throw 'Cannot read existing JVM performance counters' }
     $process = Get-Process -Id $BurpPid
+    $io = Get-CimInstance Win32_Process -Filter "ProcessId = $BurpPid"
+    if (!$io) { throw 'Cannot read Burp process IO counters' }
     [ordered]@{
         phase = $Phase
         sample = $index
@@ -21,6 +23,9 @@ for ($index = 0; $index -lt $Samples; $index++) {
         working_set_bytes = $process.WorkingSet64
         private_bytes = $process.PrivateMemorySize64
         handles = $process.HandleCount
+        cpu_seconds = $process.TotalProcessorTime.TotalSeconds
+        read_bytes = $io.ReadTransferCount
+        write_bytes = $io.WriteTransferCount
     } | ConvertTo-Json -Compress
     if ($index -lt ($Samples - 1)) { Start-Sleep -Seconds $IntervalSeconds }
 }

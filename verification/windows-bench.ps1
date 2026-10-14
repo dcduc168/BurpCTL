@@ -42,9 +42,10 @@ try {
                 $latencies.Add($watch.Elapsed.TotalMilliseconds)
                 $size = [Text.Encoding]::UTF8.GetByteCount($output)
                 $counters = New-Object BurpCtlMemory+Counters
-                if ([BurpCtlMemory]::GetProcessMemoryInfo($handle, [ref]$counters, [Runtime.InteropServices.Marshal]::SizeOf($counters))) {
-                    $peak = [Math]::Max($peak, [long]$counters.peakWorkingSet.ToUInt64())
+                if (![BurpCtlMemory]::GetProcessMemoryInfo($handle, [ref]$counters, [Runtime.InteropServices.Marshal]::SizeOf($counters))) {
+                    throw ('Cannot read CLI memory counters: ' + [Runtime.InteropServices.Marshal]::GetLastWin32Error())
                 }
+                $peak = [Math]::Max($peak, [long]$counters.peakWorkingSet.ToUInt64())
             } finally { $process.Dispose() }
         }
         $sorted = @($latencies | Sort-Object)
