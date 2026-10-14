@@ -62,7 +62,7 @@ public final class History {
     }
     private boolean matches(ProxyHttpRequestResponse row, Map<String, Object> filters) {
         var request = row.finalRequest();
-        if (!inScope(row)) return false;
+        if (!api.scope().isInScope(request.url())) return false;
         if (filters.containsKey("host") && !request.httpService().host().equalsIgnoreCase((String)filters.get("host"))) return false;
         if (filters.containsKey("method") && !request.method().equals(filters.get("method"))) return false;
         if (filters.containsKey("path_contains") && !request.pathWithoutQuery().contains((String)filters.get("path_contains"))) return false;
