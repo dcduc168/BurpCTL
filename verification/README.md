@@ -7,7 +7,7 @@ Run these checks from a source checkout after building the Windows CLI and exten
 | Change | Check |
 |---|---|
 | Rust client, arguments or output | Cargo fmt/check/clippy and the two focused IPC checks |
-| Java dispatcher, authentication, policy or unload | Gradle build and `StatusSmoke` |
+| Java dispatcher, authentication, policy or unload | Gradle build, `StatusSmoke` and `SettingsSmoke` |
 | History filters, field selection or byte handling | `HistorySmoke`, then the native corpus check |
 | Raw streaming or destination handling | Native corpus and `windows-partial.ps1` |
 | Protocol examples or release packaging | `release-checks.py` |
@@ -42,12 +42,13 @@ $cli = (Resolve-Path 'cli\target\x86_64-pc-windows-msvc\release\burpctl.exe').Pa
 New-Item -ItemType Directory -Force $classes | Out-Null
 $classpath = "$classes;$extension;$montoya"
 
-& $javac --release 21 -cp "$extension;$montoya" -d $classes verification\StatusSmoke.java verification\TrafficFixture.java verification\HistorySmoke.java verification\HistoryServer.java verification\PartialSmokeServer.java
+& $javac --release 21 -cp "$extension;$montoya" -d $classes verification\StatusSmoke.java verification\TrafficFixture.java verification\HistorySmoke.java verification\HistoryServer.java verification\PartialSmokeServer.java verification\SettingsSmoke.java
 & $java -cp $classpath StatusSmoke
 & $java -cp $classpath HistorySmoke
+& $java -cp $classpath SettingsSmoke
 ```
 
-Check each native command's exit code before continuing. `StatusSmoke` covers malformed frames, authentication/context/schema denial before Montoya, overload and cleanup. `HistorySmoke` covers scope, concurrent callback limits, projection without body reads, UTF-8 failures, missing responses and exact bytes.
+Check each native command's exit code before continuing. `StatusSmoke` covers malformed frames, authentication/context/schema denial before Montoya, overload and cleanup. `HistorySmoke` covers scope, concurrent callback limits, projection without body reads, UTF-8 failures, missing responses and exact bytes. `SettingsSmoke` checks lazy EDT construction, search keywords, keyboard/accessibility labels, metadata/raw dependency and permission revocation after unload.
 
 ## Native corpus and interrupted exports
 
@@ -76,7 +77,7 @@ This script starts and stops its own fixture. It interrupts a stream after a chu
 
 ## Live Burp
 
-Load the JAR, confirm authenticated `status`, check permissions independently, then unload and confirm discovery excludes that instance. Reload must produce a fresh instance ID with permissions disabled. Record Burp edition/version and its actual runtime; compiling Java 21 bytecode does not verify a Java 21 Burp installation.
+Load the JAR, confirm the settings panel appears in Burp Settings when searching for `BurpCTL` and that no suite tab is added. Check authenticated `status` and toggle metadata/raw independently; disabling metadata must revoke raw. Then unload and confirm discovery excludes that instance. Reload must produce a fresh instance ID with permissions disabled. Record Burp edition/version and its actual runtime; compiling Java 21 bytecode does not verify a Java 21 Burp installation.
 
 Use existing authorized history for read checks. `TrafficFixture populate` is available for a real binary corpus, but it sends 100 POST requests through `127.0.0.1:8080` to its temporary server at `http://127.0.0.1:18123/fixture/0..99`. Run it only after explicit traffic authorization, operator scope setup and interception configuration. It adds project history and does not delete it. Its optional `populate 99` form sends only the last request and requires authorization for that retry.
 

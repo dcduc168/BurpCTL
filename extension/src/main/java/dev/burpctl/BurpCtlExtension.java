@@ -4,6 +4,7 @@ import burp.api.montoya.BurpExtension;
 import burp.api.montoya.MontoyaApi;
 import dev.burpctl.runtime.Server;
 import dev.burpctl.security.Policy;
+import dev.burpctl.ui.PermissionSettings;
 import javax.swing.*;
 
 public final class BurpCtlExtension implements BurpExtension {
@@ -12,32 +13,19 @@ public final class BurpCtlExtension implements BurpExtension {
         api.extension().setName("BurpCTL " + Server.EXTENSION_VERSION);
         var policy = new Policy();
         var server = new Server(api, policy);
-        var tab = new java.util.concurrent.atomic.AtomicReference<burp.api.montoya.core.Registration>();
+        var settings = new PermissionSettings(api.userInterface(), policy);
+        var settingsRegistration = new java.util.concurrent.atomic.AtomicReference<burp.api.montoya.core.Registration>();
         var stopped = new java.util.concurrent.atomic.AtomicBoolean();
         api.extension().registerUnloadingHandler(() -> {
-            stopped.set(true); policy.metadata.set(false); policy.raw.set(false); server.close();
-            var registration = tab.getAndSet(null);
+            stopped.set(true); settings.close(); server.close();
+            var registration = settingsRegistration.getAndSet(null);
             if (registration != null) registration.deregister();
         });
         SwingUtilities.invokeLater(() -> {
             if (stopped.get()) return;
-            var panel = new JPanel(); panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
-            var metadata = new JCheckBox("Allow CLI metadata reads for in-scope history");
-            var raw = new JCheckBox("Allow CLI raw message and body reads for in-scope history");
-            metadata.addActionListener(event -> {
-                policy.metadata.set(metadata.isSelected());
-                if (!metadata.isSelected()) { raw.setSelected(false); policy.raw.set(false); }
-            });
-            raw.addActionListener(event -> {
-                if (!metadata.isSelected()) raw.setSelected(false);
-                policy.raw.set(raw.isSelected());
-            });
-            panel.add(new JLabel("Enable only data you authorize local CLI tooling to read. Permissions reset on reload."));
-            panel.add(metadata); panel.add(raw);
-            api.userInterface().applyThemeToComponent(panel);
-            var registration = api.userInterface().registerSuiteTab("BurpCTL", panel);
-            tab.set(registration);
-            if (stopped.get() && tab.compareAndSet(registration, null)) registration.deregister();
+            var registration = api.userInterface().registerSettingsPanel(settings);
+            settingsRegistration.set(registration);
+            if (stopped.get() && settingsRegistration.compareAndSet(registration, null)) registration.deregister();
         });
         var startup = new Thread(() -> {
             try {

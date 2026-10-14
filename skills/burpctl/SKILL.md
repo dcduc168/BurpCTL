@@ -5,7 +5,7 @@ description: Read authorized Burp Suite proxy history through the native Windows
 
 Use the short-lived `burpctl.exe`; from WSL invoke the Windows executable, not the Linux development build. Discover syntax with `--help` and `<command> --help` rather than guessing flags.
 
-Start with `instance list --format json`. Select explicitly with `--instance ID` when several instances exist. `status` reports identity and permissions. History access is disabled until the operator enables it in Burp's BurpCTL tab; raw access has a separate control. Do not modify policy or scope to bypass a denial.
+Start with `instance list --format json`. Select explicitly with `--instance ID` when several instances exist. `status` reports identity and permissions. History access is disabled until the operator enables it in Burp Settings (search for `BurpCTL`); raw access has a separate control. Do not modify policy or scope to bypass a denial.
 
 Prefer small server-side projections:
 

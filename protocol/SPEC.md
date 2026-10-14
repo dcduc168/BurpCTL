@@ -214,6 +214,8 @@ Stderr error messages include stable error code; JSON mode emits valid structure
 
 Java enforces authentication, instance/project context, metadata/raw permissions, scope, output/body budgets and concurrency. Handcrafted IPC requests pass through the same dispatcher and policy as official CLI requests. There is no `--unsafe` bypass.
 
+Permissions are configured in a Montoya settings panel inside Burp Settings (search for `BurpCTL`). They remain in memory and reset on extension reload; there is no suite tab or settings persistence. Disabling metadata also revokes raw access. The panel is created once on the EDT when Burp requests its component; it has no polling or history queries.
+
 Status and scope checks require authentication. History requires metadata permission and in-scope rows; byte retrieval also requires raw permission. Scope membership does not establish engagement authorization. The CLI writes an export only when the operator supplies an output path.
 
 ### Operation contracts
@@ -243,7 +245,7 @@ Java connection deadline is 30 seconds, history callback deadline 20 seconds, ov
 
 Raw opening/end controls include protocol version and request ID. The client rejects extra frames, wrong count/hash, EOF or stream error, and cleans `.part` files on failure. Exports do not overwrite without `--force`; no export path is sent to Java. Tiny ephemeral rendezvous files are the only production writes without an explicit export.
 
-The client validates exclusive response variants: a normal success requires an object result and completion metadata, an error requires code/message/retryable, and a raw export success requires an opening stream followed by verified bytes and a terminal control. A normal success cannot complete a requested raw export. Extension status and tab name use the JAR's `Implementation-Version` build metadata; source-classpath development runs report `development`.
+The client validates exclusive response variants: a normal success requires an object result and completion metadata, an error requires code/message/retryable, and a raw export success requires an opening stream followed by verified bytes and a terminal control. A normal success cannot complete a requested raw export. Extension status and name use the JAR's `Implementation-Version` build metadata; source-classpath development runs report `development`.
 
 ## 9. Protocol change discipline
 

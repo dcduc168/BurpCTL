@@ -10,7 +10,7 @@ Build the [CLI and extension](#build-from-source), then:
 
 1. Copy `burpctl.exe` to local NTFS and add its directory to Windows PATH. The MSVC build requires `VCRUNTIME140.dll`; loading the executable from a WSL share was slower on the tested host.
 2. Load `burpctl-extension.jar` as a Java extension in Burp. The extension needs Java 21 or later and Montoya 2026.7 APIs.
-3. Open the BurpCTL tab. Enable metadata reads for history you authorize local tooling to access. Enable raw reads separately when you need message or body bytes.
+3. Open Burp Settings and search for `BurpCTL`. Enable metadata reads for history you authorize local tooling to access. Enable raw reads separately when you need message or body bytes.
 
 History permissions start disabled and reset on reload. History reads require Burp scope membership as well as permission; scope membership alone does not establish engagement authorization.
 
@@ -88,7 +88,7 @@ Packaging checks artifact versions and Java 21 bytecode, excludes bundled Montoy
 
 Windows checks covered authenticated Rust/Java UDS, permissions, scope, field selection, instance ambiguity, lifecycle cleanup and incomplete exports. An actual Windows Temurin 21.0.12 runtime passed the production-server fixtures: 200 raw byte/hash comparisons and 100 Base64-prefix comparisons. A fix for intermittent EOF receive stalls passed 3,000 successive reads. Cargo fmt/check/clippy, two focused Rust checks on Linux and native Windows, Gradle build and release checks passed.
 
-Controlled five-minute idle samples with and without the extension showed no increase in Burp process I/O transfer counters. Heap grew in both samples without GC, so retained extension RAM is not established. An authorized workload added 20,000 unique loopback POSTs. Before request reuse, a no-match query allocated about 170 MiB on the IPC worker; this measures allocation churn, not retained memory or peak heap. The request-reuse change still needs a live reload and measurement.
+Controlled five-minute idle samples with and without the extension showed no increase in Burp process I/O transfer counters. Heap grew in both samples without GC, so retained extension RAM is not established. An authorized workload added 20,000 unique loopback POSTs. Before request reuse, a no-match query allocated about 170 MiB on the IPC worker; this measures allocation churn, not retained memory or peak heap. The request-reuse change still needs live allocation measurements.
 
 Other open checks: Community edition, real Burp running Java 21, multiple real Burp windows, live HTTP/2/gzip, twenty real reloads, abrupt JVM crash recovery and Windows path races. Fixture checks do not establish those integrations.
 
