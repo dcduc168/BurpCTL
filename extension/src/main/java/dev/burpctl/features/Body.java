@@ -15,9 +15,9 @@ import java.util.Set;
 public final class Body {
     public static final List<String> DEFAULT_FIELDS = List.of("size_bytes", "returned_bytes", "encoding", "data", "truncated");
     public static void validate(Map<String, Object> params) {
-        if (!Set.of("request", "response", "request.body", "response.body").contains(params.get("part"))) throw new Fault("INVALID_ARGUMENT");
+        if (!(params.get("part") instanceof String part) || !Set.of("request", "response", "request.body", "response.body").contains(part)) throw new Fault("INVALID_ARGUMENT");
         Object mode = params.getOrDefault("encoding", "utf8");
-        if (!Set.of("utf8", "base64", "raw").contains(mode)) throw new Fault("INVALID_ARGUMENT");
+        if (!(mode instanceof String) || !Set.of("utf8", "base64", "raw").contains(mode)) throw new Fault("INVALID_ARGUMENT");
         History.integer(params.getOrDefault("body_max_bytes", 4096L), 1, 65536);
         if (mode.equals("raw") && (params.containsKey("fields") || params.containsKey("body_max_bytes"))) throw new Fault("INVALID_ARGUMENT");
         fields(params);

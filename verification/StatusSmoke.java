@@ -48,6 +48,13 @@ public final class StatusSmoke {
             envelope.put("auth", token); envelope.put("method", "status"); envelope.put("params", Map.of());
             envelope.put("context", Map.of("instance_id", metadata.get("instance_id"), "project_id", "fixture-project"));
             require(Boolean.TRUE.equals(request(socket, envelope).get("ok")), "Authenticated status");
+            for (String input : java.util.List.of("{\"id\":1,\"part\":null}", "{\"id\":1,\"part\":\"response.body\",\"encoding\":null}")) {
+                var invalid = new java.util.LinkedHashMap<>(envelope);
+                invalid.put("method", "history.get"); invalid.put("params", Json.decode(input));
+                int count = calls.get();
+                require("INVALID_ARGUMENT".equals(((Map<?, ?>)request(socket, invalid).get("error")).get("code")), "Null enums rejected");
+                require(calls.get() == count, "Null enums invoked Montoya");
+            }
             var namedId = new java.util.LinkedHashMap<>(envelope); namedId.put("id", "invalid");
             require(Boolean.TRUE.equals(request(socket, namedId).get("ok")), "Opaque IDs have no reserved sentinel value");
             for (String failure : java.util.List.of("AUTH_FAILED", "STALE_REFERENCE", "INCOMPATIBLE_PROTOCOL", "UNKNOWN_METHOD", "INVALID_ARGUMENT")) {
