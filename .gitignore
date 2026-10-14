@@ -1,0 +1,6 @@
+cli/target/
+extension/.gradle/
+extension/build/
+.gradle/
+*.part
+BurpCTL-*.zip
