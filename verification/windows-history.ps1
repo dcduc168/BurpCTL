@@ -1,7 +1,8 @@
 param(
     [Parameter(Mandatory=$true)][string]$Java,
     [Parameter(Mandatory=$true)][string]$Classes,
-    [Parameter(Mandatory=$true)][string]$Cli
+    [Parameter(Mandatory=$true)][string]$Cli,
+    [string]$Instance
 )
 $ErrorActionPreference = 'Stop'
 $root = Join-Path $env:LOCALAPPDATA ('bctl-' + [Guid]::NewGuid().ToString('N').Substring(0,8))
@@ -17,13 +18,22 @@ try {
     Copy-Item -LiteralPath $Cli -Destination $native
     $expected = & $Java -cp $Classes TrafficFixture hashes | ConvertFrom-Json
     if ($LASTEXITCODE -ne 0 -or $expected.Count -ne 100) { throw 'Cannot generate fixture digests' }
-    $status = & $native status --format json | ConvertFrom-Json
+    $selection = if ($Instance) { @('--instance', $Instance) } else { @() }
+    $status = & $native @selection status --format json | ConvertFrom-Json
     if ($LASTEXITCODE -ne 0 -or !$status.result.permissions.history_raw) { throw 'Raw fixture access is not enabled' }
     $instance = $status.result.instance_id
     $project = $status.result.project_id
     $common = @('--instance', $instance, '--format', 'json')
     $list = & $native @common history list --limit 100 --host 127.0.0.1 --path-contains /fixture/ --fields id,path,status | ConvertFrom-Json
     if ($LASTEXITCODE -ne 0 -or $list.result.items.Count -ne 100) { throw 'Expected 100 authorized fixture records' }
+    $fixtureIndices = New-Object 'Collections.Generic.HashSet[int]'
+    $historyIds = New-Object 'Collections.Generic.HashSet[int]'
+    foreach ($row in $list.result.items) {
+        if ($row.path -notmatch '^/fixture/(0|[1-9][0-9]?)$') { throw 'Unexpected fixture path' }
+        $index = [int]$Matches[1]
+        if (!$fixtureIndices.Add($index) -or !$historyIds.Add([int]$row.id)) { throw 'Duplicate fixture index or history ID; corpus coverage is incomplete' }
+    }
+    if ($fixtureIndices.Count -ne 100) { throw 'Corpus must cover every fixture index 0..99' }
     $latencies = New-Object Collections.Generic.List[double]
     $bytes = 0L
     foreach ($row in $list.result.items) {
