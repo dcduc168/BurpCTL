@@ -200,19 +200,51 @@ pub fn request_timeout(
     write_until(&mut client, &payload, deadline)?;
     let (_, frame) = read_frame(&mut client, deadline)?;
     let result = control(&frame, value)?;
-    if !result.get("ok").is_some_and(serde_json::Value::is_boolean) {
-        return Err(invalid());
-    }
+    validate_response(&result, export.is_some())?;
     if result.get("stream").is_some() {
-        if result["ok"] != true {
-            return Err(invalid());
-        }
         let export = export.ok_or_else(invalid)?;
         return receive_export(&mut client, value, result, export, deadline)
             .map_err(|_| io::Error::new(io::ErrorKind::UnexpectedEof, PartialTransfer));
     }
     eof(&mut client, deadline)?;
     Ok(result)
+}
+fn validate_response(response: &serde_json::Value, export: bool) -> io::Result<()> {
+    let ok = response["ok"].as_bool().ok_or_else(invalid)?;
+    let allowed: &[&str] = if !ok {
+        let error = &response["error"];
+        if !error.is_object()
+            || error["code"].as_str().is_none_or(str::is_empty)
+            || !error["message"].is_string()
+            || !error["retryable"].is_boolean()
+        {
+            return Err(invalid());
+        }
+        &["version", "id", "ok", "error"]
+    } else if response.get("stream").is_some() {
+        if !export || !response["stream"].is_object() || !response["meta"].is_object() {
+            return Err(invalid());
+        }
+        &["version", "id", "ok", "stream", "meta"]
+    } else {
+        if export
+            || !response["result"].is_object()
+            || !response["meta"]["complete"].is_boolean()
+            || !response["meta"]["truncated"].is_boolean()
+        {
+            return Err(invalid());
+        }
+        &["version", "id", "ok", "result", "meta"]
+    };
+    if response
+        .as_object()
+        .ok_or_else(invalid)?
+        .keys()
+        .any(|key| !allowed.contains(&key.as_str()))
+    {
+        return Err(invalid());
+    }
+    Ok(())
 }
 fn receive_export(
     client: &mut UnixStream,
@@ -260,7 +292,12 @@ fn receive_export(
         }
         let ending = control(&frame, request)?;
         let hash = format!("{:x}", digest.finalize());
-        if ending["stream_end"]["complete"] != true
+        if ending
+            .as_object()
+            .ok_or_else(invalid)?
+            .keys()
+            .any(|key| !matches!(key.as_str(), "version" | "id" | "stream_end"))
+            || ending["stream_end"]["complete"] != true
             || ending["stream_end"]["bytes_sent"] != received
             || received != size
             || ending["stream_end"]["sha256"].as_str() != Some(&hash)
@@ -282,5 +319,65 @@ fn receive_export(
             "meta":{"complete":true,"truncated":false,"provenance":opening["meta"]["provenance"],
                 "representation":opening["meta"]["representation"],"transformation":"none"}}),
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[cfg(unix)]
+    use std::os::unix::net::UnixListener;
+    #[cfg(windows)]
+    use uds_windows::UnixListener;
+
+    #[test]
+    fn response_variants_cannot_report_an_export_without_a_stream() {
+        let normal = serde_json::json!({"version":{"major":1,"minor":0},"id":"audit","ok":true,
+            "result":{},"meta":{"complete":true,"truncated":false}});
+        let error = serde_json::json!({"version":{"major":1,"minor":0},"id":"audit","ok":false,
+            "error":{"code":"PERMISSION_DENIED","message":"denied","retryable":false}});
+        for (reply, export, valid) in [
+            (normal.clone(), false, true),
+            (normal, true, false),
+            (error, true, true),
+            (
+                serde_json::json!({"version":{"major":1,"minor":0},"id":"audit","ok":true}),
+                false,
+                false,
+            ),
+            (
+                serde_json::json!({"version":{"major":1,"minor":0},"id":"audit","ok":false}),
+                false,
+                false,
+            ),
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let socket = directory.path().join("s");
+            let listener = UnixListener::bind(&socket).unwrap();
+            let server = std::thread::spawn(move || {
+                let (mut client, _) = listener.accept().unwrap();
+                let (_, request) =
+                    read_frame(&mut client, Instant::now() + Duration::from_secs(5)).unwrap();
+                assert_eq!(request[0], 1);
+                let payload = serde_json::to_vec(&reply).unwrap();
+                client
+                    .write_all(&((payload.len() + 1) as u32).to_be_bytes())
+                    .unwrap();
+                client.write_all(&[1]).unwrap();
+                client.write_all(&payload).unwrap();
+            });
+            let options = ExportOptions {
+                output: directory.path().join("evidence.bin"),
+                force: false,
+            };
+            let response = request(
+                &socket,
+                &serde_json::json!({"id":"audit"}),
+                export.then_some(&options),
+            );
+            server.join().unwrap();
+            assert_eq!(response.is_ok(), valid);
+            assert!(!options.output.exists());
+        }
     }
 }
