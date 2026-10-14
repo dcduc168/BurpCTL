@@ -2,7 +2,7 @@
 
 A short-lived native Windows CLI and a Java 21 Burp extension for authorized, on-demand reads. Implemented: `status`, `instance list`, `history list/get`, and `scope check`. No history mirror, index, database, CLI daemon, or automatic exports.
 
-The read commands have been exercised on Windows with Burp Suite Professional 2026.10. Full release acceptance is **not yet established**: controlled idle/large-history memory profiling, Community edition, actual Windows Java 21 runtime, and additional host coverage remain unverified.
+The read commands have been exercised on Windows with Burp Suite Professional 2026.10. Full release acceptance is **not yet established**: retained memory attribution, Community edition, and additional real Burp host coverage remain open.
 
 ## Build
 
@@ -92,4 +92,8 @@ For an IPC-only corpus run, start `HistoryServer` with both JARs and fixture cla
 
 Token measurements require `tiktoken` 0.12.0: `uv run --with tiktoken==0.12.0 python verification/output-tokens.py CLI_EXE --instance FIXTURE_INSTANCE`. Run only against the synthetic corpus.
 
-The tested history had only about 101 synthetic entries. A five-minute idle sample had uncontrolled ambient activity and GC, so no causal extension heap/RSS overhead or large-history allocation bound was established. Additional open checks include Community edition, Windows Java 21, multiple real Burp windows, live HTTP/2/gzip, repeated real extension reloads, abrupt JVM crash recovery and adversarial Windows path races. Fixture checks do not establish those integrations.
+Open integration checks include Community edition, real Burp running Java 21, multiple real Burp windows, live HTTP/2/gzip, repeated real extension reloads, abrupt JVM crash recovery and adversarial Windows path races. Fixture checks do not establish those integrations.
+
+Further Windows checks used an actual Temurin 21.0.12 runtime: production IPC/security/lifecycle fixtures, 200 raw byte/hash comparisons, 100 Base64 prefixes, and interrupted-export cleanup passed. Repeated reads exposed intermittent stalls after a complete response while the CLI waited for EOF; nonblocking Winsock readiness checks passed 3,000 successive reads while preserving trailing-byte rejection and deadlines. Two focused Rust checks also passed natively on Windows.
+
+Controlled five-minute unloaded/loaded idle samples each showed no increase in Burp process I/O transfer counters. Heap grew in both samples without GC, so these samples do not establish retained extension RAM. An explicitly authorized corpus added 20,000 unique loopback POSTs. Before the request-reuse optimization, no-match history queries allocated approximately 170 MiB per command on the IPC worker (rounded diagnostic counters); this is allocation churn, not retained memory or a measured peak. Montoya allocation remains workload dependent and is not bounded by the output limit.
