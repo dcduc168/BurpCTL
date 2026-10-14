@@ -7,6 +7,7 @@ dependencyLocking { lockAllConfigurations() }
 java { toolchain { languageVersion.set(JavaLanguageVersion.of(21)) } }
 tasks.withType<JavaCompile>().configureEach { options.release.set(21) }
 tasks.jar {
+    manifest { attributes["Implementation-Version"] = project.version.toString() }
     archiveFileName.set("burpctl-extension.jar")
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
     from(configurations.runtimeClasspath.get().map { if (it.isDirectory) it else zipTree(it) })

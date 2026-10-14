@@ -28,6 +28,8 @@ import java.util.concurrent.TimeUnit;
 
 public final class Server implements AutoCloseable {
     public static final Map<String, Object> VERSION = Map.of("major", 1, "minor", 0);
+    public static final String EXTENSION_VERSION = java.util.Objects.requireNonNullElse(
+            Server.class.getPackage().getImplementationVersion(), "development");
     private final MontoyaApi api;
     private final Policy policy;
     private final History history;
@@ -180,7 +182,7 @@ public final class Server implements AutoCloseable {
             if (query.result() instanceof History.Export export) return new RawResponse(id, export, (int)budget);
             result = query.result(); meta.putAll(query.meta());
             meta.put("provenance", Map.of("instance_id", instance, "project_id", project));
-        } else result = Map.of("instance_id", instance, "project_id", project, "extension_version", "0.1.0",
+        } else result = Map.of("instance_id", instance, "project_id", project, "extension_version", EXTENSION_VERSION,
                 "burp_version", api.burpSuite().version().toString(), "methods", java.util.List.of("status", "scope.check", "history.list", "history.get"),
                 "permissions", Map.of("history_metadata", policy.metadata.get(), "history_raw", policy.raw.get()));
         if (!project.equals(api.project().id())) throw new Fault("STALE_REFERENCE");

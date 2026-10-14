@@ -9,7 +9,7 @@ import javax.swing.*;
 public final class BurpCtlExtension implements BurpExtension {
     @Override
     public void initialize(MontoyaApi api) {
-        api.extension().setName("BurpCTL 0.1.0");
+        api.extension().setName("BurpCTL " + Server.EXTENSION_VERSION);
         var policy = new Policy();
         var server = new Server(api, policy);
         var tab = new java.util.concurrent.atomic.AtomicReference<burp.api.montoya.core.Registration>();
