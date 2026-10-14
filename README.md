@@ -6,10 +6,10 @@ The read commands have been exercised on Windows with Burp Suite Professional 20
 
 ## Build
 
-Development tools are pinned in [mise.toml](mise.toml); Rust uses stable. Dependencies are locked, Gradle artifacts have checksum verification, and the wrapper distribution has a pinned checksum.
+Use stable Rust and JDK 21 (verified with Temurin 21.0.12). Set `JAVA_HOME` to the JDK. The Gradle wrapper pins Gradle 9.2.1; dependencies are locked, and Gradle artifacts and the wrapper distribution have checksum verification. Personal tool configuration and agent instructions stay local and are ignored by Git.
 
 ```sh
-mise exec -- extension/gradlew -p extension build --no-daemon
+./extension/gradlew -p extension build --no-daemon
 cargo fmt --manifest-path cli/Cargo.toml -- --check
 cargo check --manifest-path cli/Cargo.toml --locked
 cargo clippy --manifest-path cli/Cargo.toml --locked -- -D warnings
@@ -18,6 +18,7 @@ cargo clippy --manifest-path cli/Cargo.toml --locked -- -D warnings
 On a Windows MSVC development host:
 
 ```powershell
+.\extension\gradlew.bat -p extension build --no-daemon
 cargo build --manifest-path cli/Cargo.toml --target x86_64-pc-windows-msvc --release --locked
 ```
 
@@ -33,6 +34,18 @@ The CLI is `cli/target/x86_64-pc-windows-msvc/release/burpctl.exe`; the extensio
 ```sh
 python3 scripts/package-release.py --output BurpCTL-0.1.0.zip
 ```
+
+## Repository layout
+
+| Directory | Purpose |
+|---|---|
+| `cli/` | Stateless Rust client, instance discovery, IPC and output |
+| `extension/` | Montoya operations, policy, IPC server and lifecycle |
+| `protocol/` | Wire contract and golden frame examples |
+| `docs/` | Capabilities, implementation gates and measured evidence |
+| `verification/` | Standalone integration fixtures and benchmark scripts |
+| `skills/burpctl/` | Agent command discovery and authorized read workflow |
+| `scripts/` | Explicit release packaging |
 
 ## Use
 
