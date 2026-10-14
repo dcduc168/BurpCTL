@@ -30,6 +30,23 @@ public final class StatusSmoke {
         }
     }
     static void require(boolean value, String message) { if (!value) throw new AssertionError(message); }
+    static void malformed(Path socket, byte[] bytes) throws Exception {
+        int count = calls.get();
+        try (var client = SocketChannel.open(StandardProtocolFamily.UNIX)) {
+            client.connect(UnixDomainSocketAddress.of(socket));
+            var input = java.nio.ByteBuffer.wrap(bytes);
+            while (input.hasRemaining()) client.write(input);
+            client.shutdownOutput(); client.configureBlocking(false);
+            long deadline = System.nanoTime() + 2_000_000_000L;
+            int received;
+            do {
+                received = client.read(java.nio.ByteBuffer.allocate(1));
+                if (received == 0) Thread.sleep(10);
+            } while (received == 0 && System.nanoTime() < deadline);
+            require(received == -1, "Malformed frame must close without a response");
+        }
+        require(calls.get() == count, "Malformed frame invoked Montoya");
+    }
     public static void main(String[] args) throws Exception {
         Path root = Path.of(System.getenv("LOCALAPPDATA"), "burpctl", "r");
         var before = Files.exists(root) ? directories(root) : java.util.Set.<Path>of();
@@ -43,6 +60,8 @@ public final class StatusSmoke {
             var metadata = Json.decode(Files.readString(owned.resolve("instance.json")));
             String token = Files.readString(owned.resolve("credential"));
             Path socket = owned.resolve("s");
+            for (byte[] invalid : java.util.List.of(new byte[]{0, 0, 0, 0}, new byte[]{0, 4, 0, 2},
+                    new byte[]{0, 0, 0, 1, 2}, new byte[]{0, 0, 0, 4, 1, '{'})) malformed(socket, invalid);
             var envelope = new java.util.LinkedHashMap<String, Object>();
             envelope.put("version", Map.of("major", 1, "minor", 0)); envelope.put("id", "smoke");
             envelope.put("auth", token); envelope.put("method", "status"); envelope.put("params", Map.of());
@@ -101,7 +120,7 @@ public final class StatusSmoke {
                 try { Json.decode(json); throw new AssertionError("Invalid JSON accepted"); }
                 catch (java.io.IOException expected) {}
             }
-            System.out.println("PASS: overload BUSY, status, auth/context/version/method/params denial before Montoya, strict JSON");
+            System.out.println("PASS: malformed framing, overload BUSY, status, auth/context/version/method/params denial before Montoya, strict JSON");
         } finally { server.close(); }
         require(owned != null && !Files.exists(owned), "Owned files removed on close");
         long deadline = System.nanoTime() + 2_000_000_000L;

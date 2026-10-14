@@ -49,13 +49,6 @@ enum Command {
         #[command(subcommand)]
         command: InstanceCommand,
     },
-    /// Verify framed transport against the one-shot Java fixture.
-    #[command(hide = true)]
-    TransportProbe {
-        socket: PathBuf,
-        #[arg(long, default_value = "valid", value_parser = ["valid", "zero", "oversized", "tag", "truncated"])]
-        case: String,
-    },
 }
 #[derive(Subcommand)]
 enum HistoryCommand {
@@ -149,14 +142,6 @@ fn code_exit(code: &str) -> i32 {
     }
 }
 fn run(cli: &Cli) -> Result<Value, &'static str> {
-    if let Command::TransportProbe { socket, case } = &cli.command {
-        let result = if case == "valid" {
-            ipc::echo(socket, json!({"version":{"major":1,"minor":0},"id":"probe","text":"Tiếng Việt 🦀","escaped":"\u{0000}\u{001b}\r\n"}).to_string().as_bytes())
-        } else {
-            ipc::rejected(socket, case)
-        };
-        return result.map(|_| json!({"ok":true})).map_err(|_| "IPC_ERROR");
-    }
     let instances =
         instance::discover(cli.instance.as_deref()).map_err(|error| match error.kind() {
             std::io::ErrorKind::Unsupported => "FEATURE_UNAVAILABLE",
