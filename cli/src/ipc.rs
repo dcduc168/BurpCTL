@@ -63,6 +63,58 @@ fn control(frame: &[u8], request: &serde_json::Value) -> io::Result<serde_json::
     }
     Ok(result)
 }
+#[cfg(windows)]
+fn eof(client: &mut UnixStream, deadline: Instant) -> io::Result<()> {
+    use std::os::windows::io::AsRawSocket;
+    use windows_sys::Win32::Networking::WinSock::{FD_SET, TIMEVAL, WSAGetLastError, select};
+    client.set_nonblocking(true)?;
+    let mut trailing = [0];
+    loop {
+        remaining(deadline)?;
+        match client.read(&mut trailing) {
+            Ok(0) => return Ok(()),
+            Ok(_) => return Err(invalid()),
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error),
+        }
+        let left = remaining(deadline)?;
+        let mut set = FD_SET {
+            fd_count: 1,
+            fd_array: [0; 64],
+        };
+        set.fd_array[0] = client.as_raw_socket() as usize;
+        let timeout = TIMEVAL {
+            tv_sec: left.as_secs().min(i32::MAX as u64) as i32,
+            tv_usec: left.subsec_micros() as i32,
+        };
+        // Windows AF_UNIX can stall in blocking recv after a complete reply; wait for EOF readiness.
+        // The socket stays owned here, and the pointers refer to initialized stack values.
+        let ready = unsafe {
+            select(
+                0,
+                &mut set,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                &timeout,
+            )
+        };
+        if ready < 0 {
+            let error = io::Error::from_raw_os_error(unsafe { WSAGetLastError() });
+            if error.kind() == io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(error);
+        }
+        if ready == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "IPC deadline exceeded",
+            ));
+        }
+    }
+}
+#[cfg(not(windows))]
 fn eof(client: &mut UnixStream, deadline: Instant) -> io::Result<()> {
     let mut trailing = [0];
     client.set_read_timeout(Some(remaining(deadline)?))?;
@@ -265,6 +317,39 @@ mod tests {
     use std::os::unix::net::UnixListener;
     #[cfg(windows)]
     use uds_windows::UnixListener;
+
+    #[test]
+    fn eof_requires_close_rejects_trailing_bytes_and_respects_deadline() {
+        for scenario in 0..3 {
+            let directory = tempfile::tempdir().unwrap();
+            let socket = directory.path().join("s");
+            let listener = UnixListener::bind(&socket).unwrap();
+            let server = std::thread::spawn(move || {
+                let (mut peer, _) = listener.accept().unwrap();
+                std::thread::sleep(Duration::from_millis(30));
+                if scenario == 1 {
+                    peer.write_all(&[1]).unwrap();
+                }
+                if scenario == 2 {
+                    std::thread::sleep(Duration::from_millis(150));
+                }
+            });
+            let mut client = UnixStream::connect(&socket).unwrap();
+            let started = Instant::now();
+            let result = eof(&mut client, started + Duration::from_millis(100));
+            match scenario {
+                0 => assert!(result.is_ok()),
+                1 => assert_eq!(result.unwrap_err().kind(), io::ErrorKind::InvalidData),
+                2 => assert!(matches!(
+                    result.unwrap_err().kind(),
+                    io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
+                )),
+                _ => unreachable!(),
+            }
+            assert!(started.elapsed() < Duration::from_secs(1));
+            server.join().unwrap();
+        }
+    }
 
     #[test]
     fn response_variants_cannot_report_an_export_without_a_stream() {
