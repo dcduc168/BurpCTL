@@ -1,6 +1,6 @@
 # BurpCTL — IPC & CLI Specification v1.0 (design contract)
 
-> Status: **Protocol 1.0 implemented; release verification is incomplete (see docs/VERIFICATION.md)**. Date: 2026-10-14. The five v1 commands are implemented. Target: Rust stable (`burpctl.exe`) ↔ Java 21 Burp Extension ↔ Montoya API. Security goal: authorized local tooling on an operator-controlled Windows workstation, NOT secure isolation from a malicious process running as the same user.
+> Status: **Protocol 1.0 implemented; release verification is incomplete (see [README verification](../README.md#verification))**. Date: 2026-10-14. The five v1 commands are implemented. Target: Rust stable (`burpctl.exe`) ↔ Java 21 Burp Extension ↔ Montoya API. Security goal: authorized local tooling on an operator-controlled Windows workstation, NOT secure isolation from a malicious process running as the same user.
 
 ## 1. Non-negotiable invariants
 

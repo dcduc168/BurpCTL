@@ -30,6 +30,6 @@ with args.output.open('xb') as output:
         for name, data in artifacts.items():
             package.writestr(name, data)
         package.writestr('SHA256SUMS', checksums)
-        for relative in ['README.md', 'protocol/SPEC.md', 'docs/CAPABILITIES.md', 'docs/IMPLEMENTATION.md', 'docs/VERIFICATION.md', 'skills/burpctl/SKILL.md']:
+        for relative in ['README.md', 'protocol/SPEC.md', 'skills/burpctl/SKILL.md']:
             package.write(root / relative, relative)
 print(f'Packaged BurpCTL {version} protocol 1.0: {args.output}')

@@ -2,7 +2,7 @@
 
 A short-lived native Windows CLI and a Java 21 Burp extension for authorized, on-demand reads. Implemented: `status`, `instance list`, `history list/get`, and `scope check`. No history mirror, index, database, CLI daemon, or automatic exports.
 
-The read commands have been exercised on Windows with Burp Suite Professional 2026.10. Full release acceptance is **not yet established**: controlled idle/large-history memory profiling, Community edition, actual Windows Java 21 runtime, and additional host coverage remain unverified. See [verification evidence](docs/VERIFICATION.md).
+The read commands have been exercised on Windows with Burp Suite Professional 2026.10. Full release acceptance is **not yet established**: controlled idle/large-history memory profiling, Community edition, actual Windows Java 21 runtime, and additional host coverage remain unverified.
 
 ## Build
 
@@ -42,7 +42,6 @@ python3 scripts/package-release.py --output BurpCTL-0.1.0.zip
 | `cli/` | Stateless Rust client, instance discovery, IPC and output |
 | `extension/` | Montoya operations, policy, IPC server and lifecycle |
 | `protocol/` | Wire contract and golden frame examples |
-| `docs/` | Capabilities, implementation gates and measured evidence |
 | `verification/` | Standalone integration fixtures and benchmark scripts |
 | `skills/burpctl/` | Agent command discovery and authorized read workflow |
 | `scripts/` | Explicit release packaging |
@@ -77,4 +76,12 @@ The private runtime root is `%LOCALAPPDATA%\burpctl\r`. Startup fails if private
 
 Use the Windows executable from WSL, for example `/mnt/c/Tools/burpctl.exe status`. The Linux build is for development checks, not a client for Windows sockets. Stdout contains results; stderr contains diagnostics. JSON failures from a valid server response remain structured, with stable exit codes described in [the protocol](protocol/SPEC.md).
 
-The repository [Agent Skill](skills/burpctl/SKILL.md) documents discovery and scoped evidence retrieval. Project contracts are [capabilities](docs/CAPABILITIES.md), [protocol](protocol/SPEC.md), and [implementation gates](docs/IMPLEMENTATION.md).
+The repository [Agent Skill](skills/burpctl/SKILL.md) documents discovery and scoped evidence retrieval. The [protocol](protocol/SPEC.md) defines framing, permissions, fields, budgets and error codes.
+
+## Verification
+
+Checked on Windows 11 with Burp Professional 2026.10-54643 and its bundled Java 26.0.2, using Java 21 bytecode: native Rust/Java UDS, authentication and ACLs, denied permissions, scoped reads, projection, instance ambiguity, unload cleanup and incomplete-export cleanup. An authorized 100-message loopback corpus passed 200 exact request/response body comparisons and 100 Base64-prefix comparisons. Cargo fmt/check/clippy, including Windows-target clippy, and Gradle build passed. These checks preceded Git initialization.
+
+Standalone Java and PowerShell checks live in `verification/`. Compile the Java fixtures against the extension JAR and Montoya 2026.7 JAR with `javac --release 21 -d CLASSES -cp CLASSPATH`; run `StatusSmoke` and `HistorySmoke` with both JARs and the compiled classes on the classpath. `PerfSnapshot` uses an internal JVM API and instead needs `-source 21 -target 21 --add-exports jdk.internal.jvmstat/sun.jvmstat.monitor=ALL-UNNAMED` at compilation and the same export at runtime. PowerShell scripts take explicit Java, classpath and CLI paths. Only run `TrafficFixture populate` with explicit traffic authorization and its loopback URL in Burp scope; the read CLI never sends fixture traffic or changes scope.
+
+The tested history had only about 101 synthetic entries. A five-minute idle sample had uncontrolled ambient activity and GC, so no causal extension heap/RSS overhead or large-history allocation bound was established. Additional open checks include Community edition, Windows Java 21, multiple real Burp windows, live HTTP/2/gzip, repeated real extension reloads, abrupt JVM crash recovery and adversarial Windows path races. Fixture checks do not establish those integrations.
