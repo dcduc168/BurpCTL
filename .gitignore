@@ -1,4 +1,5 @@
 # Private agent instructions and local tool configuration
+/docs/
 AGENTS.md
 mise.toml
 mise.local.toml
