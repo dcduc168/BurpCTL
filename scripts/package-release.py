@@ -34,7 +34,7 @@ def package_release(output: Path) -> str:
     artifacts = {cli.name: cli_bytes, extension.name: extension.read_bytes()}
     checksums = ''.join(f'{hashlib.sha256(data).hexdigest()}  {name}\n' for name, data in artifacts.items())
     artifacts['SHA256SUMS'] = checksums.encode()
-    for relative in ['README.md', 'protocol/SPEC.md', 'skills/burpctl/SKILL.md']:
+    for relative in ['README.md', 'protocol/SPEC.md', 'skills/burpctl/SKILL.md', 'verification/README.md']:
         artifacts[relative] = (root / relative).read_bytes()
     # Only a file created by this invocation is removed on failure.
     handle = output.open('xb')

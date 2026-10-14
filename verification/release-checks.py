@@ -32,7 +32,7 @@ assert ending['stream_end']['sha256'] == hashlib.sha256(body).hexdigest()
 
 with tempfile.TemporaryDirectory(prefix='burpctl-release-check-') as directory:
     release.root = Path(directory)
-    inputs = ['cli/Cargo.toml', 'extension/build.gradle.kts', 'README.md', 'protocol/SPEC.md', 'skills/burpctl/SKILL.md',
+    inputs = ['cli/Cargo.toml', 'extension/build.gradle.kts', 'README.md', 'protocol/SPEC.md', 'skills/burpctl/SKILL.md', 'verification/README.md',
               'cli/target/x86_64-pc-windows-msvc/release/burpctl.exe', 'extension/build/libs/burpctl-extension.jar']
     for relative in inputs:
         destination = release.root / relative
@@ -42,7 +42,7 @@ with tempfile.TemporaryDirectory(prefix='burpctl-release-check-') as directory:
     release.package_release(output)
     with zipfile.ZipFile(output) as package:
         assert package.testzip() is None
-        assert set(package.namelist()) == {'burpctl.exe', 'burpctl-extension.jar', 'SHA256SUMS', 'README.md', 'protocol/SPEC.md', 'skills/burpctl/SKILL.md'}
+        assert set(package.namelist()) == {'burpctl.exe', 'burpctl-extension.jar', 'SHA256SUMS', 'README.md', 'protocol/SPEC.md', 'skills/burpctl/SKILL.md', 'verification/README.md'}
         for line in package.read('SHA256SUMS').decode().splitlines():
             digest, name = line.split('  ', 1)
             assert hashlib.sha256(package.read(name)).hexdigest() == digest

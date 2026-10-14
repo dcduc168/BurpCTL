@@ -1,56 +1,18 @@
 # BurpCTL
 
-A short-lived native Windows CLI and a Java 21 Burp extension for authorized, on-demand reads. Implemented: `status`, `instance list`, `history list/get`, and `scope check`. No history mirror, index, database, CLI daemon, or automatic exports.
+Read Burp Suite status, scope and proxy history from a native Windows CLI. BurpCTL queries Montoya on demand and returns selected fields or exact message bytes. It keeps no history cache or index.
 
-The read commands have been exercised on Windows with Burp Suite Professional 2026.10. Full release acceptance is **not yet established**: retained memory attribution, Community edition, and additional real Burp host coverage remain open.
+Version 0.1.0 implements `status`, `instance list`, `history list`, `history get` and `scope check`. It has been exercised with Burp Suite Professional 2026.10. Full v1 acceptance remains open; see [verification](#verification).
 
-## Build
+## Get started
 
-Use stable Rust and JDK 21 (verified with Temurin 21.0.12). Set `JAVA_HOME` to the JDK. The Gradle wrapper pins Gradle 9.2.1; dependencies are locked, and Gradle artifacts and the wrapper distribution have checksum verification. Personal tool configuration and agent instructions stay local and are ignored by Git.
+Build the [CLI and extension](#build-from-source), then:
 
-```sh
-./extension/gradlew -p extension build --no-daemon
-cargo fmt --manifest-path cli/Cargo.toml -- --check
-cargo check --manifest-path cli/Cargo.toml --locked
-cargo clippy --manifest-path cli/Cargo.toml --locked -- -D warnings
-```
+1. Copy `burpctl.exe` to local NTFS and add its directory to Windows PATH. The MSVC build requires `VCRUNTIME140.dll`; loading the executable from a WSL share was slower on the tested host.
+2. Load `burpctl-extension.jar` as a Java extension in Burp. The extension needs Java 21 or later and Montoya 2026.7 APIs.
+3. Open the BurpCTL tab. Enable metadata reads for history you authorize local tooling to access. Enable raw reads separately when you need message or body bytes.
 
-On a Windows MSVC development host:
-
-```powershell
-.\extension\gradlew.bat -p extension build --no-daemon
-cargo build --manifest-path cli/Cargo.toml --target x86_64-pc-windows-msvc --release --locked
-```
-
-From WSL, the verified alternative uses `cargo-xwin` 0.23.1 and the MSVC target:
-
-```sh
-rustup target add x86_64-pc-windows-msvc
-cargo xwin build --manifest-path cli/Cargo.toml --target x86_64-pc-windows-msvc --release --locked
-```
-
-The CLI is `cli/target/x86_64-pc-windows-msvc/release/burpctl.exe`; the extension is `extension/build/libs/burpctl-extension.jar`. Package matching artifacts using Python 3.11+ on Windows or WSL with Windows interop. Packaging checks the CLI's `--version` and the JAR's build version, rejects stale artifacts, and removes its incomplete archive on failure:
-
-```sh
-python3 scripts/package-release.py --output BurpCTL-0.1.0.zip
-```
-
-## Repository layout
-
-| Directory | Purpose |
-|---|---|
-| `cli/` | Stateless Rust client, instance discovery, IPC and output |
-| `extension/` | Montoya operations, policy, IPC server and lifecycle |
-| `protocol/` | Wire contract and golden frame examples |
-| `verification/` | Standalone integration fixtures and benchmark scripts |
-| `skills/burpctl/` | Agent command discovery and authorized read workflow |
-| `scripts/` | Explicit release packaging |
-
-## Use
-
-Copy `burpctl.exe` onto local NTFS and place it on Windows PATH. The current MSVC binary imports `VCRUNTIME140.dll`; the corresponding MSVC runtime must be available (it was present on the verified host). Loading it from a WSL UNC share was substantially slower in this session. Add the JAR as a Java extension in Burp; a supported Java 21+ runtime and Montoya 2026.7 APIs are required. The tested Burp bundle uses Java 26.0.2.
-
-Status and scope membership checks are available after authentication. History permissions default to off: enable metadata and, separately, raw access in the **BurpCTL** tab only for data you authorize local tooling to read. History reads remain restricted to Burp scope. Permissions reset on reload; scope membership is not engagement authorization.
+History permissions start disabled and reset on reload. History reads require Burp scope membership as well as permission; scope membership alone does not establish engagement authorization.
 
 ```powershell
 burpctl.exe instance list --format json
@@ -60,7 +22,13 @@ burpctl.exe --instance INSTANCE history list --host example.com --status 500 --f
 burpctl.exe --instance INSTANCE scope check https://example.com/admin
 ```
 
-Keep both identities from `meta.provenance` with history IDs. Numeric retrieval requires explicit source context:
+Replace `INSTANCE` with an ID from `instance list`. If several instances are running, select one explicitly. These commands send no target traffic.
+
+From WSL, call the Windows executable: `/mnt/c/Tools/burpctl.exe status`. The Linux build is for development checks and cannot connect to Windows sockets. Use `--help` or `<command> --help` for the available options.
+
+## Retrieve evidence
+
+Keep each history ID with its `meta.provenance.instance_id` and `project_id`. Retrieval requires both source identities:
 
 ```powershell
 burpctl.exe --instance INSTANCE history get 123 --project-id PROJECT --fields id,status
@@ -68,32 +36,66 @@ burpctl.exe --instance INSTANCE history get 123 --project-id PROJECT --part resp
 burpctl.exe --instance INSTANCE history get 123 --project-id PROJECT --part request.body --raw --output evidence.bin
 ```
 
-UTF-8 previews reject invalid prefixes; use Base64 or raw export for arbitrary bytes. Preview truncation is explicit. Raw export verifies byte count and SHA-256 before publishing the destination; an existing destination requires `--force`. Exports inherit destination-directory permissions. Losslessness refers to Montoya bytes, not HTTP/2 network framing.
+Replace `123`, `INSTANCE` and `PROJECT` with values from the same result. Reloading the extension invalidates its instance ID. If the project changes, reload and obtain fresh references.
 
-History ordering is unspecified, and queries may traverse all entries. Row limits cap accepted results; they do not bound Montoya's internal allocations or prove more matches exist. `path` omits query strings. Filtering and field projection run in Java before serialization. An empty list succeeds.
+UTF-8 previews reject invalid sequences, including a prefix cut within a character. Use Base64 or raw export for arbitrary bytes. Preview metadata reports truncation. Raw export verifies byte count and SHA-256 before publishing the file, cleans incomplete transfers and requires `--force` to replace an existing destination. Export files inherit the destination directory's permissions.
 
-The private runtime root is `%LOCALAPPDATA%\burpctl\r`. Startup fails if private NTFS ACLs cannot be established or the socket path exceeds 100 UTF-8 bytes. Files belonging to other instances are never removed; stale entries are excluded after authenticated liveness checks. Reloads invalidate instance identity. If the project identity changes, reload the extension and obtain fresh references. ACLs and tokens do not isolate the service from malicious same-user processes.
+Exact bytes refer to Montoya's message representation. They do not preserve HTTP/2 network framing. Raw retrieval does not decompress bodies or normalize line endings.
 
-Use the Windows executable from WSL, for example `/mnt/c/Tools/burpctl.exe status`. The Linux build is for development checks, not a client for Windows sockets. Stdout contains results; stderr contains diagnostics. JSON failures from a valid server response remain structured, with stable exit codes described in [the protocol](protocol/SPEC.md).
+## Output and limits
 
-The repository [Agent Skill](skills/burpctl/SKILL.md) documents discovery and scoped evidence retrieval. The [protocol](protocol/SPEC.md) defines framing, permissions, fields, budgets and error codes.
+Filtering and field selection run in Java before serialization. `path` excludes the query string. Empty lists succeed. History ordering is unspecified; row limits cap returned matches, not traversal or Montoya allocations, and a limit hit does not prove that more matches exist.
+
+Compact output is the default. Use `--format json` to retain the protocol envelope. Stdout carries results, stderr carries diagnostics, and exit codes distinguish denial, timeout and incomplete export. See the [protocol reference](protocol/SPEC.md) for fields, budgets and errors.
+
+Each instance uses a token and current-user NTFS ACLs under `%LOCALAPPDATA%\burpctl\r`. Startup fails if ACL setup fails or the socket path exceeds 100 UTF-8 bytes. Discovery checks liveness through authenticated status calls; it excludes stale entries and leaves other instances' files alone. ACLs and tokens do not isolate BurpCTL from malicious processes running as the same user.
+
+The [BurpCTL Agent Skill](skills/burpctl/SKILL.md) covers instance selection and authorized evidence retrieval.
+
+## Build from source
+
+Use stable Rust and JDK 21. Set `JAVA_HOME` to the JDK. Gradle 9.2.1 is pinned by the wrapper; dependencies are locked and Gradle artifacts have checksum verification.
+
+On Windows with MSVC build tools:
+
+```powershell
+.\extension\gradlew.bat -p extension build --no-daemon
+cargo build --manifest-path cli/Cargo.toml --target x86_64-pc-windows-msvc --release --locked
+```
+
+From WSL, the verified alternative uses cargo-xwin 0.23.1 and the MSVC target:
+
+```sh
+./extension/gradlew -p extension build --no-daemon
+rustup target add x86_64-pc-windows-msvc
+cargo xwin build --manifest-path cli/Cargo.toml --target x86_64-pc-windows-msvc --release --locked
+```
+
+Outputs:
+
+- CLI: `cli/target/x86_64-pc-windows-msvc/release/burpctl.exe`
+- Extension: `extension/build/libs/burpctl-extension.jar`
+
+Package matching artifacts with Python 3.11 or later on Windows, or WSL with Windows interop:
+
+```sh
+python3 scripts/package-release.py --output BurpCTL-0.1.0.zip
+```
+
+Packaging checks artifact versions and Java 21 bytecode, excludes bundled Montoya classes, writes SHA-256 checksums and removes its archive if writing fails. It never replaces an existing output.
 
 ## Verification
 
-Checked on Windows 11 with Burp Professional 2026.10-54643 and its bundled Java 26.0.2, using Java 21 bytecode: native Rust/Java UDS, authentication and ACLs, denied permissions, scoped reads, projection, instance ambiguity, unload cleanup and incomplete-export cleanup. An authorized 100-message loopback corpus passed 200 exact request/response body comparisons and 100 Base64-prefix comparisons. Cargo fmt/check/clippy, including Windows-target clippy, and Gradle build passed. These checks preceded Git initialization.
+Windows checks covered authenticated Rust/Java UDS, permissions, scope, field selection, instance ambiguity, lifecycle cleanup and incomplete exports. An actual Windows Temurin 21.0.12 runtime passed the production-server fixtures: 200 raw byte/hash comparisons and 100 Base64-prefix comparisons. A fix for intermittent EOF receive stalls passed 3,000 successive reads. Cargo fmt/check/clippy, two focused Rust checks on Linux and native Windows, Gradle build and release checks passed.
 
-Standalone Java and PowerShell checks live in `verification/`. Compile the Java fixtures against the extension JAR and Montoya 2026.7 JAR with `javac --release 21 -d CLASSES -cp CLASSPATH`; run `StatusSmoke` and `HistorySmoke` with both JARs and the compiled classes on the classpath. `PerfSnapshot` uses an internal JVM API and instead needs `-source 21 -target 21 --add-exports jdk.internal.jvmstat/sun.jvmstat.monitor=ALL-UNNAMED` at compilation and the same export at runtime. PowerShell scripts take explicit Java, classpath and CLI paths. Only run `TrafficFixture populate` with explicit traffic authorization and its loopback URL in Burp scope; the read CLI never sends fixture traffic or changes scope.
+Controlled five-minute idle samples with and without the extension showed no increase in Burp process I/O transfer counters. Heap grew in both samples without GC, so retained extension RAM is not established. An authorized workload added 20,000 unique loopback POSTs. Before request reuse, a no-match query allocated about 170 MiB on the IPC worker; this measures allocation churn, not retained memory or peak heap. The request-reuse change still needs a live reload and measurement.
 
-Focused audit regressions: `cargo test --manifest-path cli/Cargo.toml --locked` checks invalid response/export variants; `python3 verification/release-checks.py` checks golden bytes, stale artifacts and archive cleanup; `python3 verification/token-checks.py` checks fixture selection without reading Burp data. `windows-corpus.ps1 -Java JAVA_EXE -Classes CLASSES` rejects duplicate corpus entries using a temporary CLI fixture. These checks send no target traffic. Actual corpus verification requires distinct history IDs and complete fixture indices 0–99; duplicate or missing samples fail the gate. Token benchmarks resolve `/fixture/0` from scoped host/path filters and fail if its reference is missing, ambiguous or stale.
+Other open checks: Community edition, real Burp running Java 21, multiple real Burp windows, live HTTP/2/gzip, twenty real reloads, abrupt JVM crash recovery and Windows path races. Fixture checks do not establish those integrations.
 
-Verification retains the focused security, byte-integrity, export and resource gates. The original transport-only spike and hidden CLI probe have been retired; `StatusSmoke` now checks malformed frames against the production server, and the corpus/partial-transfer checks exercise native Rust/Java IPC.
+The [verification guide](verification/README.md) explains how to run the retained checks.
 
-For an IPC-only corpus run, start `HistoryServer` with both JARs and fixture classes on its classpath; it exposes the synthetic bytes through the production server and stops on stdin input. Run `windows-history.ps1 -Java JAVA_EXE -Classes CLASSES -Cli CLI_EXE -Instance FIXTURE_INSTANCE` using its explicit ID from discovery. This checks the complete native CLI/export path without contacting targets. It supplements real Burp integration; it does not verify Montoya backend allocations or wire representations.
+## Help and contributions
 
-Token measurements require `tiktoken` 0.12.0: `uv run --with tiktoken==0.12.0 python verification/output-tokens.py CLI_EXE --instance FIXTURE_INSTANCE`. Run only against the synthetic corpus.
+Report reproducible problems in [GitHub Issues](https://github.com/dcduc168/BurpCTL/issues). Include Burp edition/version, Java version, CLI/extension versions, the command and error code. Remove credentials, tokens and HTTP evidence before posting.
 
-Open integration checks include Community edition, real Burp running Java 21, multiple real Burp windows, live HTTP/2/gzip, repeated real extension reloads, abrupt JVM crash recovery and adversarial Windows path races. Fixture checks do not establish those integrations.
-
-Further Windows checks used an actual Temurin 21.0.12 runtime: production IPC/security/lifecycle fixtures, 200 raw byte/hash comparisons, 100 Base64 prefixes, and interrupted-export cleanup passed. Repeated reads exposed intermittent stalls after a complete response while the CLI waited for EOF; nonblocking Winsock readiness checks passed 3,000 successive reads while preserving trailing-byte rejection and deadlines. Two focused Rust checks also passed natively on Windows.
-
-Controlled five-minute unloaded/loaded idle samples each showed no increase in Burp process I/O transfer counters. Heap grew in both samples without GC, so these samples do not establish retained extension RAM. An explicitly authorized corpus added 20,000 unique loopback POSTs. Before the request-reuse optimization, no-match history queries allocated approximately 170 MiB per command on the IPC worker (rounded diagnostic counters); this is allocation churn, not retained memory or a measured peak. Montoya allocation remains workload dependent and is not bounded by the output limit.
+Keep changes focused. Run the relevant checks in the verification guide and update the protocol when behavior changes.
