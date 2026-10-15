@@ -26,18 +26,26 @@ public final class PrivateFiles {
     }
     public void newDirectory(Path path) throws IOException {
         Files.createDirectory(path, attribute());
+        setCreatedOwner(path);
         check(path);
     }
     public void directory(Path path) throws IOException {
-        try { Files.createDirectory(path, attribute()); }
+        try { Files.createDirectory(path, attribute()); setCreatedOwner(path); }
         catch (java.nio.file.FileAlreadyExistsException e) { /* Validate before reuse. */ }
         check(path);
         if (!Files.isDirectory(path, LinkOption.NOFOLLOW_LINKS)) throw new IOException("Invalid runtime directory");
     }
     public void file(Path path, String contents) throws IOException {
         Files.createFile(path, attribute());
+        setCreatedOwner(path);
         check(path);
         Files.writeString(path, contents);
+    }
+    public void setCreatedOwner(Path path) throws IOException {
+        // Elevated Windows tokens may default new objects to a group owner.
+        var view = Files.getFileAttributeView(path, AclFileAttributeView.class, LinkOption.NOFOLLOW_LINKS);
+        if (view == null) throw new IOException("Windows ACLs required");
+        view.setOwner(owner);
     }
     public void check(Path path) throws IOException {
         var attrs = Files.readAttributes(path, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);

@@ -70,6 +70,7 @@ public final class Server implements AutoCloseable {
         if (project == null || project.length() > 128) throw new IOException("Invalid project identity");
         listener = ServerSocketChannel.open(StandardProtocolFamily.UNIX);
         listener.bind(UnixDomainSocketAddress.of(socket));
+        security.setCreatedOwner(socket);
         // Socket ACL inherits only current-user access from the private directory.
         var socketAcl = Files.getFileAttributeView(socket, java.nio.file.attribute.AclFileAttributeView.class);
         var parentAcl = Files.getFileAttributeView(directory, java.nio.file.attribute.AclFileAttributeView.class);

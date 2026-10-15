@@ -30,6 +30,25 @@ public final class StatusSmoke {
         }
     }
     static void require(boolean value, String message) { if (!value) throw new AssertionError(message); }
+    static void runtimeOwnership() throws Exception {
+        Path directory = Files.createTempDirectory(Path.of(System.getenv("LOCALAPPDATA")), "bctl-owner-");
+        var security = new dev.burpctl.runtime.PrivateFiles(directory);
+        var user = directory.getFileSystem().getUserPrincipalLookupService().lookupPrincipalByName(System.getProperty("user.name"));
+        var original = Files.getOwner(directory, java.nio.file.LinkOption.NOFOLLOW_LINKS);
+        try {
+            if (!original.equals(user)) {
+                try { security.directory(directory); throw new AssertionError("Existing foreign owner accepted"); }
+                catch (java.io.IOException expected) { }
+                require(Files.getOwner(directory, java.nio.file.LinkOption.NOFOLLOW_LINKS).equals(original), "Existing owner must not be changed");
+            }
+            Files.delete(directory);
+            security.newDirectory(directory);
+            security.file(directory.resolve("sample"), "fixture");
+            security.check(directory);
+            security.check(directory.resolve("sample"));
+            require(Files.getOwner(directory).equals(user) && Files.getOwner(directory.resolve("sample")).equals(user), "New runtime objects use the current user owner");
+        } finally { Files.deleteIfExists(directory.resolve("sample")); Files.deleteIfExists(directory); }
+    }
     static void partialFrameDeadline() throws Exception {
         Path directory = Files.createTempDirectory(Path.of(System.getenv("LOCALAPPDATA")), "bctl-time-");
         Path socket = directory.resolve("s");
@@ -66,6 +85,7 @@ public final class StatusSmoke {
         require(calls.get() == count, "Malformed frame invoked Montoya");
     }
     public static void main(String[] args) throws Exception {
+        runtimeOwnership();
         partialFrameDeadline();
         Path root = Path.of(System.getenv("LOCALAPPDATA"), "burpctl", "r");
         var before = Files.exists(root) ? directories(root) : java.util.Set.<Path>of();
