@@ -39,7 +39,9 @@ python3 verification/checks.py --cli cli/target/HOST_TARGET/release/burpctl
 
 On Windows, append `.exe` to the CLI path and use `python`. No target traffic is sent. Temporary classes and exports are deleted on completion. The same entry point runs on all five release runners.
 
-`StatusSmoke` covers private runtime creation, unsafe POSIX modes/symlinks/hard links, partial-frame deadlines, malformed frames, authentication/context/schema denial before Montoya, overload and cleanup. `HistorySmoke` checks scope, parallel callback caps, exact projection without implicit body reads, UTF-8 failures and raw bytes. `SettingsSmoke` checks lazy EDT construction, accessibility, permission dependencies and revocation after unload.
+`StatusSmoke` covers private runtime creation, unsafe POSIX modes/symlinks/hard links, partial-frame deadlines, malformed frames, authentication/context/schema denial before Montoya, overload and cleanup. `HistorySmoke` checks scope, parallel callback caps, exact projection without implicit body reads, UTF-8 failures and raw bytes. `ReadToolsSmoke` checks parallel stats and endpoint deduplication/caps without body reads, exact-byte prefix search, issue fingerprint ambiguity/scope/edition, and Repeater UI-write authorization with no HTTP API calls. Native CLI fixtures exercise all new commands, required source context and field projection.
+
+`SettingsSmoke` checks lazy EDT construction, accessibility, permission dependencies and revocation after unload.
 
 `LifecycleSmoke` invokes the production extension entry point for 20 initialized unload/reload cycles and 20 immediate-unload races. It checks fresh identities, reset permissions and settings/socket/worker cleanup. These are synthetic-host checks, not actual Burp reloads.
 
@@ -56,6 +58,8 @@ Use existing authorized history for read checks. `TrafficFixture populate` is av
 ## Remaining integration gaps
 
 Native fixtures passed on Windows x86_64, Linux x86_64/ARM64 and macOS Intel/Apple Silicon. Live Burp checks used Professional 2026.10 on Windows with bundled Java 26 running Java 21 bytecode. Fixtures do not establish live Linux/macOS Burp UI behavior, Community edition support or a real Burp installation running Java 21.
+
+The new stats/endpoints/match/issues/Repeater-open slice still needs live Burp integration and peak-memory checks. In particular, synthetic Site Map nodes do not prove the real callback behavior. Repeater UI writes are tested only with stubs; do not open tabs on a real project without authorization.
 
 Other open checks include multiple real Burp windows, live HTTP/2/gzip, twenty actual Burp reloads, abrupt JVM crash recovery and adversarial filesystem path races. Retained extension memory and per-operation Burp peak memory have not been isolated by measurement.
 

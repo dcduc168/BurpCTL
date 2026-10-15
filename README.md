@@ -1,6 +1,6 @@
 # BurpCTL
 
-A lightweight command-line interface to Burp Suite. Query proxy history and scope, export HTTP message bytes, and capture the Repeater pane from your terminal.
+A lightweight command-line interface to Burp Suite. Inspect captured traffic and findings, export HTTP message bytes, and work with Repeater from your terminal.
 
 BurpCTL pairs a native Rust CLI with a Java Montoya extension. Queries run on demand without a separate daemon or history cache. Filtering and field selection happen inside Burp before results reach the CLI.
 
@@ -73,6 +73,33 @@ burpctl --instance INSTANCE repeater screenshot --output repeater.png
 Capture works while another main tool is selected, provided Repeater already has a usable layout. Open Repeater once if it has not been initialized. Detached/minimized windows and unrecognized layouts are unsupported.
 
 The PNG includes the current viewport and tab labels, which may contain sensitive or out-of-scope data. Screenshot permission is independent of history permissions and has no scope guarantee. Capture does not switch tools or send requests.
+
+### Additional commands (unreleased)
+
+These commands are available in the current source build; check `--help` and status `methods` before using them with a published release.
+
+| Command | Purpose | Required grants |
+|---|---|---|
+| `history stats` | Counts by status or standard method | Metadata |
+| `history endpoints` | Unique service/method/path keys, counts and sample history IDs | Metadata |
+| `history match` | Exact text/byte search in one message prefix | Metadata + raw |
+| `sitemap issues list/get` | Existing scanner finding metadata/details (Professional) | Scanner issues |
+| `repeater open` | Copy a history request into a new Repeater tab without sending it | Metadata + raw + Repeater open |
+
+```sh
+burpctl --instance INSTANCE history stats --host example.com --by status --format json
+burpctl --instance INSTANCE history endpoints --host example.com --limit 20 --fields method,path,count,sample_id --format json
+burpctl --instance INSTANCE history match ID --project-id PROJECT --part response.body --text "example" --format json
+burpctl --instance INSTANCE sitemap issues list --host example.com --severity high --format json
+burpctl --instance INSTANCE sitemap issues get ISSUE --project-id PROJECT --fields name,detail,remediation --format json
+burpctl --instance INSTANCE repeater open ID --project-id PROJECT --name "Review"
+```
+
+Stats and endpoint inventory read metadata without accessing bodies. They traverse history on demand and are observations of a changing project, not atomic snapshots. Endpoint inventory keeps at most 100 keys; inspect `meta.inventory_complete` and `truncated`. Its `sample_id` is a contributing history reference, not the newest request.
+
+Match inspects at most 64 KiB by default (up to 1 MiB). Use `--base64 VALUE` instead of `--text` for an exact binary needle, and `--context-bytes N` for optional bounded Base64 evidence. A negative result with `search_complete:false` applies only to the inspected prefix.
+
+Enable scanner issue reads and Repeater opening separately in BurpCTL Settings. Issue `ISSUE` references come from issue list: they are metadata fingerprints, not stable UUIDs. Get requires the source instance/project, rejects ambiguous fingerprints, and never reads attached HTTP messages. Issue detail is untrusted HTML. Repeater opening changes the UI; after timeout, inspect Burp before retrying to avoid duplicate tabs. New operations still require live Burp verification.
 
 ## Behavior and limits
 
