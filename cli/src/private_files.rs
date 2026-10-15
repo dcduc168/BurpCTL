@@ -1,11 +1,78 @@
-use std::{io, path::Path};
+use std::{
+    io,
+    path::{Path, PathBuf},
+};
 
-#[cfg(not(windows))]
-pub fn check(_path: &Path, _socket: bool) -> io::Result<()> {
-    Err(io::Error::new(
-        io::ErrorKind::Unsupported,
-        "Windows ACLs required",
-    ))
+pub fn runtime_root() -> io::Result<PathBuf> {
+    #[cfg(windows)]
+    return std::env::var_os("LOCALAPPDATA")
+        .map(|path| PathBuf::from(path).join("burpctl"))
+        .ok_or_else(|| io::Error::new(io::ErrorKind::Unsupported, "LOCALAPPDATA unavailable"));
+    #[cfg(unix)]
+    {
+        // The same short path works for GUI and shell processes without shared environment variables.
+        Ok(std::fs::canonicalize("/tmp")?.join(format!("burpctl-{}", unsafe { libc::geteuid() })))
+    }
+}
+
+#[cfg(unix)]
+pub fn check(path: &Path, socket: bool) -> io::Result<()> {
+    use std::os::unix::fs::{FileTypeExt, MetadataExt};
+    let metadata = std::fs::symlink_metadata(path)?;
+    let valid_type = if socket {
+        metadata.file_type().is_socket()
+    } else {
+        metadata.is_dir() || (metadata.is_file() && metadata.nlink() == 1)
+    };
+    let mode = if metadata.is_dir() { 0o700 } else { 0o600 };
+    // geteuid has no preconditions and does not acquire resources.
+    if !valid_type
+        || metadata.uid() != unsafe { libc::geteuid() }
+        || metadata.mode() & 0o7777 != mode
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "Runtime path is not private",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::os::unix::{
+        fs::{PermissionsExt, symlink},
+        net::UnixListener,
+    };
+
+    #[test]
+    fn unix_runtime_rejects_public_modes_links_and_wrong_types() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        check(directory.path(), false).unwrap();
+        let file = directory.path().join("credential");
+        std::fs::write(&file, b"synthetic").unwrap();
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).unwrap();
+        check(&file, false).unwrap();
+        assert!(check(&file, true).is_err());
+        let link = directory.path().join("link");
+        symlink(&file, &link).unwrap();
+        assert!(check(&link, false).is_err());
+        std::fs::remove_file(&link).unwrap();
+        std::fs::hard_link(&file, &link).unwrap();
+        assert!(check(&file, false).is_err());
+        std::fs::remove_file(&link).unwrap();
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(check(&file, false).is_err());
+        let socket = directory.path().join("s");
+        let _listener = UnixListener::bind(&socket).unwrap();
+        std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600)).unwrap();
+        check(&socket, true).unwrap();
+        assert!(check(&socket, false).is_err());
+        std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(check(directory.path(), false).is_err());
+    }
 }
 
 #[cfg(windows)]

@@ -53,11 +53,8 @@ public final class Server implements AutoCloseable {
     }
     public synchronized void start() throws IOException {
         if (closed) return;
-        String local = System.getenv("LOCALAPPDATA");
-        if (local == null) throw new IOException("LOCALAPPDATA unavailable");
-        Path base = Path.of(local).toRealPath();
-        var security = new PrivateFiles(base);
-        Path root = base.resolve("burpctl");
+        Path root = PrivateFiles.runtimeRoot();
+        var security = new PrivateFiles(root);
         security.directory(root);
         Path runtime = root.resolve("r");
         security.directory(runtime);
@@ -70,13 +67,7 @@ public final class Server implements AutoCloseable {
         if (project == null || project.length() > 128) throw new IOException("Invalid project identity");
         listener = ServerSocketChannel.open(StandardProtocolFamily.UNIX);
         listener.bind(UnixDomainSocketAddress.of(socket));
-        security.setCreatedOwner(socket);
-        // Socket ACL inherits only current-user access from the private directory.
-        var socketAcl = Files.getFileAttributeView(socket, java.nio.file.attribute.AclFileAttributeView.class);
-        var parentAcl = Files.getFileAttributeView(directory, java.nio.file.attribute.AclFileAttributeView.class);
-        if (socketAcl == null || socketAcl.getAcl().isEmpty() || !socketAcl.getOwner().equals(parentAcl.getOwner()) ||
-                socketAcl.getAcl().stream().anyMatch(e -> e.type() != java.nio.file.attribute.AclEntryType.ALLOW || !e.principal().equals(parentAclOwner(parentAcl))))
-            throw new IOException("Socket ACL is not private");
+        security.socket(socket);
         security.file(directory.resolve("credential"), token);
         security.file(directory.resolve("instance.json"), Json.encode(Map.of(
                 "instance_id", instance, "project_id", project, "socket_path", socket.toString(),
@@ -89,9 +80,6 @@ public final class Server implements AutoCloseable {
         }, new ThreadPoolExecutor.AbortPolicy());
         var acceptor = new Thread(this::accept, "burpctl-accept");
         acceptor.setDaemon(true); acceptor.start();
-    }
-    private static java.nio.file.attribute.UserPrincipal parentAclOwner(java.nio.file.attribute.AclFileAttributeView view) {
-        try { return view.getOwner(); } catch (IOException e) { throw new java.io.UncheckedIOException(e); }
     }
     private void accept() {
         while (!closed) {

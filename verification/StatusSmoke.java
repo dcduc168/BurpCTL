@@ -31,7 +31,7 @@ public final class StatusSmoke {
     }
     static void require(boolean value, String message) { if (!value) throw new AssertionError(message); }
     static void runtimeOwnership() throws Exception {
-        Path directory = Files.createTempDirectory(Path.of(System.getenv("LOCALAPPDATA")), "bctl-owner-");
+        Path directory = Files.createTempDirectory(dev.burpctl.runtime.PrivateFiles.runtimeRoot().getParent(), "bctl-owner-");
         var security = new dev.burpctl.runtime.PrivateFiles(directory);
         var user = directory.getFileSystem().getUserPrincipalLookupService().lookupPrincipalByName(System.getProperty("user.name"));
         var original = Files.getOwner(directory, java.nio.file.LinkOption.NOFOLLOW_LINKS);
@@ -47,10 +47,32 @@ public final class StatusSmoke {
             security.check(directory);
             security.check(directory.resolve("sample"));
             require(Files.getOwner(directory).equals(user) && Files.getOwner(directory.resolve("sample")).equals(user), "New runtime objects use the current user owner");
+            if (!System.getProperty("os.name").startsWith("Windows")) {
+                Path sample = directory.resolve("sample");
+                var privateMode = java.nio.file.attribute.PosixFilePermissions.fromString("rw-------");
+                Files.setPosixFilePermissions(sample, java.nio.file.attribute.PosixFilePermissions.fromString("rw-r--r--"));
+                try { security.check(sample); throw new AssertionError("Public credential accepted"); }
+                catch (java.io.IOException expected) { }
+                Files.setPosixFilePermissions(sample, privateMode);
+                Path link = directory.resolve("link");
+                Files.createSymbolicLink(link, sample);
+                try { security.check(link); throw new AssertionError("Symlink accepted"); }
+                catch (java.io.IOException expected) { }
+                finally { Files.delete(link); }
+                Files.createLink(link, sample);
+                try { security.check(sample); throw new AssertionError("Hard-linked credential accepted"); }
+                catch (java.io.IOException expected) { }
+                finally { Files.delete(link); }
+                Files.setPosixFilePermissions(directory, java.nio.file.attribute.PosixFilePermissions.fromString("rwxr-xr-x"));
+                try { security.directory(directory); throw new AssertionError("Public directory accepted"); }
+                catch (java.io.IOException expected) { }
+                require(Files.getPosixFilePermissions(directory).contains(java.nio.file.attribute.PosixFilePermission.GROUP_READ), "Unsafe existing mode was repaired");
+                Files.setPosixFilePermissions(directory, java.nio.file.attribute.PosixFilePermissions.fromString("rwx------"));
+            }
         } finally { Files.deleteIfExists(directory.resolve("sample")); Files.deleteIfExists(directory); }
     }
     static void partialFrameDeadline() throws Exception {
-        Path directory = Files.createTempDirectory(Path.of(System.getenv("LOCALAPPDATA")), "bctl-time-");
+        Path directory = Files.createTempDirectory(dev.burpctl.runtime.PrivateFiles.runtimeRoot().getParent(), "bctl-time-");
         Path socket = directory.resolve("s");
         try (var listener = java.nio.channels.ServerSocketChannel.open(StandardProtocolFamily.UNIX);
              var client = SocketChannel.open(StandardProtocolFamily.UNIX)) {
@@ -87,7 +109,7 @@ public final class StatusSmoke {
     public static void main(String[] args) throws Exception {
         runtimeOwnership();
         partialFrameDeadline();
-        Path root = Path.of(System.getenv("LOCALAPPDATA"), "burpctl", "r");
+        Path root = dev.burpctl.runtime.PrivateFiles.runtimeRoot().resolve("r");
         var before = Files.exists(root) ? directories(root) : java.util.Set.<Path>of();
         var server = new Server((MontoyaApi) stub(MontoyaApi.class));
         Path owned = null;

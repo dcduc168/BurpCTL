@@ -1,6 +1,6 @@
 plugins { java }
 group = "dev.burpctl"
-version = "0.1.0"
+version = "0.2.0"
 description = "BurpCTL extension for authenticated local CLI access to Burp Suite"
 repositories { mavenCentral() }
 dependencies { compileOnly("net.portswigger.burp.extensions:montoya-api:2026.7"); implementation("com.google.code.gson:gson:2.13.2") }

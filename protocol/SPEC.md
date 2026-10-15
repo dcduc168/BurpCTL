@@ -1,8 +1,8 @@
 # BurpCTL protocol 1.0
 
-The Windows Rust CLI communicates with the Java 21 extension over authenticated Unix domain sockets. This reference describes the implemented protocol and CLI. Release verification remains incomplete; see [verified behavior and limits](../README.md#verification).
+The native Windows, Linux or macOS Rust CLI communicates with the Java 21 extension over authenticated Unix domain sockets. This reference describes the implemented protocol and CLI. Release verification remains incomplete; see [verified behavior and limits](../README.md#verification).
 
-The service is intended for authorized local tooling on an operator-controlled workstation. ACLs and authentication do not isolate it from malicious processes running as the same user.
+The service is intended for authorized local tooling on an operator-controlled workstation. Filesystem permissions and authentication do not isolate it from malicious processes running as the same user.
 
 ## 1. Invariants
 
@@ -18,10 +18,10 @@ The service is intended for authorized local tooling on an operator-controlled w
 ## 2. Processes and lifecycle
 
 ```text
-Windows Codex / Claude Code / OpenCode, or WSL calling burpctl.exe
+Local automation on Windows/Linux/macOS, or WSL calling Windows burpctl.exe
         │ spawn per command
         ▼
-Rust burpctl.exe → private instance metadata → authenticated Windows AF_UNIX socket
+Native Rust CLI → private instance metadata → authenticated AF_UNIX socket
         │                                            │
         └───────── 1 request/connection ─────────────┤
                                                      ▼
@@ -32,7 +32,7 @@ Rust burpctl.exe → private instance metadata → authenticated Windows AF_UNIX
                          framed JSON response or bounded binary data frames
 ```
 
-- Java uses `ServerSocketChannel.open(StandardProtocolFamily.UNIX)` and `UnixDomainSocketAddress`. Rust uses `uds_windows` 1.2.1. Windows interoperability checks are described in the [verification guide](../verification/README.md).
+- Java uses `ServerSocketChannel.open(StandardProtocolFamily.UNIX)` and `UnixDomainSocketAddress`. Rust uses `uds_windows` 1.2.1 on Windows and `std::os::unix::net::UnixStream` on Linux/macOS. CLI and extension must run on the same OS; Windows and WSL sockets are separate. Windows interoperability checks are described in the [verification guide](../verification/README.md).
 - One request per UDS connection for v1. No multiplexing, persistent CLI daemon, async Rust runtime or protocol extension engine.
 - Java accepts on a dedicated thread off Swing EDT. Small bounded worker executor + reject-on-overload; do not create one unbounded thread per connection.
 - Shutdown: stop accepting → close listener and in-flight clients → cancel owned cancelable tasks → close resources → remove only owned socket/registry files. Handle abrupt JVM crash/stale socket without deleting a live endpoint owned by another process.
@@ -41,12 +41,14 @@ Rust burpctl.exe → private instance metadata → authenticated Windows AF_UNIX
 
 - Each load creates a random 32-hex-character `instance_id` and a 256-bit token encoded as 64 hex characters. `project_id` comes from `api.project().id()`; project names and paths are omitted.
 - The socket path is `%LOCALAPPDATA%\burpctl\r\<first-12-instance-id-characters>\s`. Startup requires current-user NTFS ACLs and a path of at most 100 UTF-8 bytes. Relocation is not implemented; an overlong path fails explicitly.
-- Newly created runtime directories, files and sockets have their owner explicitly set to the current user before validation. Existing objects with unexpected owners or ACLs are rejected without changing ownership, including when running elevated.
+- On Linux/macOS, the root is the canonical `/tmp/burpctl-<uid>` (usually `/private/tmp/burpctl-<uid>` on macOS), with the same `r/<first-12-instance-id-characters>/s` layout. This short, UID-based path deliberately avoids GUI/shell environment differences; it does not use XDG_RUNTIME_DIR or TMPDIR. Both peers validate current-user ownership, directory mode 0700, regular-file/socket mode 0600, object type and non-symlink paths. Regular runtime files with multiple hard links are rejected. Unsafe existing paths are not repaired. A pre-created foreign root causes denial, never deletion or ownership takeover. Unix startup requires the JDK `jdk.security.auth` module for OS user identity. The 100-byte socket-path limit applies on every OS.
+- POSIX permission checks assume a trusted OS-managed temporary parent and local filesystem. Custom extended ACLs and adversarial filesystem replacement races have not been comprehensively verified; tokens/permissions do not exclude malicious same-user code. Runtime files are ephemeral, not configuration or caches.
+- Newly created Windows runtime directories, files and sockets have their owner explicitly set to the current user before validation. Existing objects with unexpected owners or ACLs are rejected without changing ownership, including when running elevated.
 - Each private instance directory contains `instance.json`, `credential` and socket `s`. Registry metadata contains `instance_id`, `project_id`, `pid`, `socket_path`, `protocol_major` and `created_at`. The credential is separate and never returned by discovery.
 - Discovery validates private paths and metadata, then probes authenticated `status`. Unusable entries are excluded. Discovery does not delete stale files; unload removes only that instance's files. Adversarial reparse-point races remain an open verification item.
 - `instance list` succeeds with an empty list when none are usable. Other commands require one live instance: select with `--instance` when several exist, or receive `AMBIGUOUS_INSTANCE`. No usable instance returns `INSTANCE_NOT_FOUND`. Numeric history retrieval always requires explicit instance and project IDs.
 - `project_id` is important for evidence provenance, but two Burp windows can still refer to the same project. Attach both `instance_id` and `project_id` to evidence references. A reference is invalid across a change in `project_id` or extension instance identity unless explicit remapping is proven safe.
-- Threat-model boundary: private Windows same-user processes might still read instance files and invoke the service; UDS ACL/token do not guarantee protection from malicious same-user code. Side-effect permissions should remain explicit.
+- Threat-model boundary: same-user processes might still read instance files and invoke the service; UDS permissions/token do not guarantee protection from malicious same-user code. Side-effect permissions should remain explicit.
 
 ## 4. Framing, bytes and versioning
 

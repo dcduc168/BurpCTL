@@ -33,7 +33,7 @@ public final class BurpCtlExtension implements BurpExtension {
                 if (!stopped.get()) api.logging().logToOutput("BurpCTL ready (" + Server.EXTENSION_VERSION + ").");
             } catch (Exception e) {
                 server.close();
-                if (!stopped.get()) api.logging().logToError("BurpCTL startup failed: " + e.getClass().getSimpleName() + "; check Windows runtime path and ACL support.");
+                if (!stopped.get()) api.logging().logToError("BurpCTL startup failed: " + e.getClass().getSimpleName() + "; check runtime path and private filesystem permissions.");
             }
         }, "burpctl-start");
         startup.setDaemon(true); startup.start();

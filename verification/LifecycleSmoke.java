@@ -25,7 +25,7 @@ public final class LifecycleSmoke {
         StatusSmoke.require(condition.getAsBoolean(), message);
     }
     public static void main(String[] args) throws Exception {
-        Path root = Path.of(System.getenv("LOCALAPPDATA"), "burpctl", "r");
+        Path root = dev.burpctl.runtime.PrivateFiles.runtimeRoot().resolve("r");
         var initial = Files.exists(root) ? StatusSmoke.directories(root) : java.util.Set.<Path>of();
         var identities = new java.util.HashSet<Object>();
         for (int cycle = 0; cycle < 40; cycle++) {

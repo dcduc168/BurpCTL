@@ -52,13 +52,7 @@ fn bounded_file(path: &std::path::Path, maximum: u64) -> io::Result<Vec<u8>> {
     Ok(bytes)
 }
 pub fn discover(selected: Option<&str>) -> io::Result<Vec<Instance>> {
-    let Some(local) = std::env::var_os("LOCALAPPDATA") else {
-        return Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "Native Windows CLI required",
-        ));
-    };
-    let root = PathBuf::from(local).join("burpctl");
+    let root = private_files::runtime_root()?;
     if !root.exists() {
         return Ok(Vec::new());
     }

@@ -387,13 +387,13 @@ fn main() {
                     "instance or project changed; obtain a fresh history reference"
                 }
                 "PERMISSION_DENIED" => {
-                    "runtime files must belong to the current user with private ACLs"
+                    "runtime files must belong to the current user with private permissions"
                 }
                 "PARTIAL_TRANSFER" => "export incomplete; no destination was published",
                 "INVALID_ARGUMENT" => {
                     "check options and source context; an existing export requires --force"
                 }
-                "FEATURE_UNAVAILABLE" => "use the native Windows executable",
+                "FEATURE_UNAVAILABLE" => "check platform and runtime support",
                 "BUSY" => "instance is busy; retry or select an explicit instance",
                 "TIMEOUT" => "IPC deadline exceeded; backend completion is unknown",
                 _ => "command failed",

@@ -1,6 +1,6 @@
 # Verification
 
-Run these checks from a source checkout after building the Windows CLI and extension. Fixtures exercise production code with synthetic data; they do not establish Burp edition support or Montoya memory bounds.
+Run these checks from a source checkout after building the native CLI and extension. Fixtures exercise production code with synthetic data; they do not establish Burp edition support or Montoya memory bounds.
 
 ## Choose the check
 
@@ -9,7 +9,7 @@ Run these checks from a source checkout after building the Windows CLI and exten
 | Rust client, arguments or output | Cargo fmt/check/clippy and the focused IPC checks |
 | Java dispatcher, authentication, policy or unload | Gradle build, `StatusSmoke`, `SettingsSmoke` and `LifecycleSmoke` |
 | History filters, field selection or byte handling | `HistorySmoke`, then the native corpus check |
-| Raw streaming or destination handling | Native corpus and `windows-partial.ps1` |
+| Raw streaming or destination handling | `checks.py` native corpus and interrupted-export checks |
 | Repeater screenshot | `ScreenshotSmoke`, native PNG export and live visible/offscreen Repeater capture |
 | Protocol examples or release artifacts | `release-checks.py` |
 | Performance claim | `windows-bench.ps1` and controlled Burp resource samples |
@@ -27,62 +27,25 @@ cargo test --manifest-path cli/Cargo.toml --locked
 python3 verification/release-checks.py
 ```
 
-On Windows, use `extension\gradlew.bat` for the Java build. Run Windows-target Rust checks on an MSVC development host or with the documented WSL cross-build tools. `release-checks.py` needs both built artifacts and Windows executable support; it checks golden frame bytes, raw-stream hashes, artifact versions and rejection of missing or stale binaries.
+On Windows, use `extension\gradlew.bat` for the Java build. Build the native CLI with an explicit host target and `--release`, as the release workflow does. `release-checks.py --target HOST_TARGET` verifies golden frame bytes, raw-stream hashes, native executable format, artifact versions and rejection of missing or stale binaries. Its default target is the current host; a Windows cross-build from WSL needs `--target x86_64-pc-windows-msvc`.
 
-## Compile the Java fixtures
+## Native integration checks
 
-Use a JDK and the Montoya 2026.7 JAR from the build dependency cache. In PowerShell, set `$montoya` to that JAR's absolute path:
+Use Python 3.11+, a JDK on PATH and the built extension JAR. The script finds the locked Montoya API JAR in the Gradle cache, compiles the existing Java fixtures, then starts/stops only synthetic servers:
 
-```powershell
-$java = Join-Path $env:JAVA_HOME 'bin\java.exe'
-$javac = Join-Path $env:JAVA_HOME 'bin\javac.exe'
-$classes = Join-Path $env:TEMP 'burpctl-checks'
-$extension = (Resolve-Path 'extension\build\libs\burpctl-extension.jar').Path
-$montoya = 'C:\path\to\montoya-api-2026.7.jar'
-$cli = (Resolve-Path 'cli\target\x86_64-pc-windows-msvc\release\burpctl.exe').Path
-New-Item -ItemType Directory -Force $classes | Out-Null
-$classpath = "$classes;$extension;$montoya"
-
-& $javac --release 21 -cp "$extension;$montoya" -d $classes verification\StatusSmoke.java verification\TrafficFixture.java verification\HistorySmoke.java verification\HistoryServer.java verification\PartialSmokeServer.java verification\SettingsSmoke.java verification\LifecycleSmoke.java verification\ScreenshotSmoke.java
-& $java -cp $classpath StatusSmoke
-& $java -cp $classpath HistorySmoke
-& $java -cp $classpath SettingsSmoke
-& $java -cp $classpath LifecycleSmoke
-& $java -cp $classpath ScreenshotSmoke
+```sh
+python3 verification/checks.py --cli cli/target/HOST_TARGET/release/burpctl
 ```
 
-Check each native command's exit code before continuing. `StatusSmoke` covers a stalled partial-frame deadline, malformed frames, authentication/context/schema denial before Montoya, overload and cleanup. `HistorySmoke` covers scope, concurrent callback limits, projection without body reads, UTF-8 failures, missing responses and exact bytes. It also checks that host/method/path/status mismatches skip URL/scope work and that ID lookup retains scope checks before acceptance and output. `SettingsSmoke` checks lazy EDT construction, search keywords, keyboard/accessibility labels, metadata/raw dependency and permission revocation after unload.
+On Windows, append `.exe` to the CLI path and use `python`. No target traffic is sent. Temporary classes and exports are deleted on completion. The same entry point runs on all five release runners.
 
-`LifecycleSmoke` calls the production extension entry point for 20 initialized unload/reload cycles and 20 immediate-unload races. It checks fresh identities, permission reset, settings deregistration and socket/worker cleanup while a partial frame is waiting. These are synthetic-host checks, not 20 actual Burp reloads.
+`StatusSmoke` covers private runtime creation, unsafe POSIX modes/symlinks/hard links, partial-frame deadlines, malformed frames, authentication/context/schema denial before Montoya, overload and cleanup. `HistorySmoke` checks scope, parallel callback caps, exact projection without implicit body reads, UTF-8 failures and raw bytes. `SettingsSmoke` checks lazy EDT construction, accessibility, permission dependencies and revocation after unload.
 
-`ScreenshotSmoke` opens a temporary synthetic Swing window and checks permission denial before UI access, PNG pixels/dimensions, independent screenshot policy, one-operation concurrency, pixel-identical hidden capture without selecting Repeater, uninitialized/oversized views and queued EDT timeout cancellation. Its `serve` argument exposes that synthetic view through production IPC; select the `fixture-project` instance and run `repeater screenshot --output PATH`. Stop it with stdin after verification. No target traffic is sent.
+`LifecycleSmoke` invokes the production extension entry point for 20 initialized unload/reload cycles and 20 immediate-unload races. It checks fresh identities, reset permissions and settings/socket/worker cleanup. These are synthetic-host checks, not actual Burp reloads.
 
-## Native corpus and interrupted exports
+The native corpus covers all 100 distinct history IDs/fixture indices, compares 200 raw exports and 100 Base64 prefixes, and checks no-clobber/force. Two synthetic instances establish ambiguous selection denial and explicit selection. The interrupted-export fixture must send its first chunk before `PARTIAL_TRANSFER`; the check requires no destination or `.part` left behind, and no retained instance after unload.
 
-`windows-checks.ps1 -Classes "$env:TEMP\burpctl-checks"` compiles the fixtures and runs the Java, lifecycle, native corpus and interrupted-export checks together. Run it from the repository root after building, with a JDK on PATH. It is also the entry point used by the release workflow.
-
-Start the fixture in one terminal:
-
-```powershell
-& $java -cp $classpath HistoryServer
-```
-
-It prints `ready`, serves 100 in-memory records through the production IPC server and stops when it reads stdin. It enables metadata/raw permissions only for its synthetic records and sends no traffic.
-
-In another terminal, define the same path variables, discover the fixture instance and run:
-
-```powershell
-& $cli instance list --format json
-.\verification\windows-history.ps1 -Java $java -Classes $classpath -Cli $cli -Instance FIXTURE_INSTANCE
-```
-
-Select the instance whose project ID is `fixture-project`. The corpus check requires distinct history IDs and all fixture indices 0 through 99 before comparing 200 raw exports and 100 Base64 prefixes. It deletes its temporary exports. Stop `HistoryServer` before running the partial-transfer check:
-
-```powershell
-.\verification\windows-partial.ps1 -Java $java -Classpath $classpath -Cli $cli
-```
-
-This script starts and stops its own fixture. It requires `PARTIAL_TRANSFER`, confirms the fixture sent its first chunk, and checks that no destination or `.part` file remains. A connection error before streaming does not pass. If a real Burp instance is also running, it checks ambiguous selection.
+For a synthetic Swing screenshot check on a desktop session, add `--screenshot`. It checks permission before UI access, PNG pixels/dimensions, independent policy, concurrency, pixel-identical hidden rendering without tab selection, size limits and timeout cancellation. This optional fixture is not part of headless release CI. Live Burp UI behavior on each OS still needs manual verification.
 
 ## Live Burp
 
@@ -104,4 +67,4 @@ For idle comparison, stop scans, proxy use and Burp interaction, preserve the sa
 
 Heap includes uncollected garbage and Burp background allocations. Whole-process RSS also includes traffic retained by the project. Report workload, source version, sampling interval and uncertainty; output limits do not bound Montoya allocations.
 
-Remove `$classes` when finished. Temporary fixture processes and profiling helpers are not part of the production deployment.
+When compiling profiling helpers manually, remove their classes when finished. Temporary fixture processes and profiling helpers are not part of the production deployment.

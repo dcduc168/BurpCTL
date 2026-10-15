@@ -1,9 +1,9 @@
 ---
 name: burpctl
-description: Read authorized Burp Suite proxy history, check scope, retrieve exact message bytes, and capture the Repeater pane through the native Windows BurpCTL CLI. Use when a BurpCTL extension is available; commands do not send traffic or mutate projects.
+description: Read authorized Burp Suite proxy history, check scope, retrieve exact message bytes, and capture the Repeater pane through the native BurpCTL CLI. Use when a BurpCTL extension is available; commands do not send traffic or mutate projects.
 ---
 
-Use the short-lived `burpctl.exe`; from WSL invoke the Windows executable, not the Linux development build. Discover syntax with `--help` and `<command> --help` rather than guessing flags.
+Use the short-lived `burpctl` on Linux/macOS or `burpctl.exe` on Windows. CLI and Burp must run on the same OS; when Burp runs on Windows, invoke its Windows CLI from WSL. The examples use the Windows executable name; substitute `burpctl` on Unix. Discover syntax with `--help` and `<command> --help` rather than guessing flags.
 
 Start with `instance list --format json`. Select explicitly with `--instance ID` when several instances exist. `status` reports identity and permissions. History access is disabled until the operator enables it in Burp Settings (search for `BurpCTL`); raw access has a separate control. Do not modify policy or scope to bypass a denial.
 
