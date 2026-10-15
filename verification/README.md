@@ -11,7 +11,7 @@ Run these checks from a source checkout after building the Windows CLI and exten
 | History filters, field selection or byte handling | `HistorySmoke`, then the native corpus check |
 | Raw streaming or destination handling | Native corpus and `windows-partial.ps1` |
 | Repeater screenshot | `ScreenshotSmoke`, native PNG export and live visible/offscreen Repeater capture |
-| Protocol examples or release packaging | `release-checks.py` |
+| Protocol examples or release artifacts | `release-checks.py` |
 | Performance claim | `windows-bench.ps1` and controlled Burp resource samples |
 
 There is no unit-test framework. The Rust checks use Cargo's built-in runner; the Java checks are executable classes with assertions. The Rust export check rejects a completed stream with a wrong SHA-256 hash and requires cleanup of the destination and temporary file. The terminal-output check verifies buffer reuse for safe text and escaping of control and bidi characters.
@@ -27,7 +27,7 @@ cargo test --manifest-path cli/Cargo.toml --locked
 python3 verification/release-checks.py
 ```
 
-On Windows, use `extension\gradlew.bat` for the Java build. Run Windows-target Rust checks on an MSVC development host or with the documented WSL cross-build tools. `release-checks.py` needs both built artifacts and Windows executable support; it checks golden frame bytes, versions, checksums, failed-write cleanup and no-clobber behavior.
+On Windows, use `extension\gradlew.bat` for the Java build. Run Windows-target Rust checks on an MSVC development host or with the documented WSL cross-build tools. `release-checks.py` needs both built artifacts and Windows executable support; it checks golden frame bytes, raw-stream hashes, artifact versions and rejection of missing or stale binaries.
 
 ## Compile the Java fixtures
 
@@ -58,6 +58,8 @@ Check each native command's exit code before continuing. `StatusSmoke` covers a 
 `ScreenshotSmoke` opens a temporary synthetic Swing window and checks permission denial before UI access, PNG pixels/dimensions, independent screenshot policy, one-operation concurrency, pixel-identical hidden capture without selecting Repeater, uninitialized/oversized views and queued EDT timeout cancellation. Its `serve` argument exposes that synthetic view through production IPC; select the `fixture-project` instance and run `repeater screenshot --output PATH`. Stop it with stdin after verification. No target traffic is sent.
 
 ## Native corpus and interrupted exports
+
+`windows-checks.ps1 -Classes "$env:TEMP\burpctl-checks"` compiles the fixtures and runs the Java, lifecycle, native corpus and interrupted-export checks together. Run it from the repository root after building, with a JDK on PATH. It is also the entry point used by the release workflow.
 
 Start the fixture in one terminal:
 

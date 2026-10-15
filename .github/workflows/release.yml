@@ -25,14 +25,15 @@ jobs:
       CARGO_TERM_COLOR: always
     outputs:
       version: ${{ steps.version.outputs.version }}
-      archive: ${{ steps.version.outputs.archive }}
       prerelease: ${{ steps.version.outputs.prerelease }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: '3.14'
 
@@ -49,16 +50,18 @@ jobs:
           if f'version = "{version}"' not in pathlib.Path('extension/build.gradle.kts').read_text():
               raise SystemExit('CLI and extension versions must match')
           with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
-              output.write(f'version={version}\narchive=BurpCTL-{version}-windows-x86_64.zip\n')
+              output.write(f'version={version}\n')
               output.write(f'prerelease={str("-" in version.split("+", 1)[0]).lower()}\n')
 
-      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+      - name: Set up Java
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
         with:
           distribution: temurin
           java-version: '21.0.12+8.0.LTS'
           verify-signature: true
 
-      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
         with:
           cache-disabled: true
 
@@ -82,63 +85,27 @@ jobs:
           .\extension\gradlew.bat -p extension build --no-daemon
 
       - name: Check Java and native IPC fixtures
-        run: |
-          $PSNativeCommandUseErrorActionPreference = $true
-          $gradleHome = if ($env:GRADLE_USER_HOME) { $env:GRADLE_USER_HOME } else { Join-Path $env:USERPROFILE '.gradle' }
-          $montoya = @(Get-ChildItem -LiteralPath (Join-Path $gradleHome 'caches\modules-2\files-2.1\net.portswigger.burp.extensions\montoya-api\2026.7') -Recurse -Filter 'montoya-api-2026.7.jar')
-          if ($montoya.Count -ne 1) { throw 'Expected the locked Montoya API JAR' }
-          $classes = Join-Path $env:RUNNER_TEMP 'burpctl-checks'
-          New-Item -ItemType Directory -Path $classes -Force | Out-Null
-          $classpath = "$classes;extension\build\libs\burpctl-extension.jar;$($montoya[0].FullName)"
-          javac --release 21 -cp $classpath -d $classes verification\StatusSmoke.java verification\TrafficFixture.java verification\HistorySmoke.java verification\HistoryServer.java verification\PartialSmokeServer.java verification\SettingsSmoke.java verification\LifecycleSmoke.java
-          foreach ($check in @('StatusSmoke', 'HistorySmoke', 'SettingsSmoke', 'LifecycleSmoke')) {
-            java -cp $classpath $check
-          }
-          $fixture = New-Object Diagnostics.Process
-          $fixture.StartInfo.FileName = Join-Path $env:JAVA_HOME 'bin\java.exe'
-          $fixture.StartInfo.Arguments = '-cp "' + $classpath + '" HistoryServer'
-          $fixture.StartInfo.UseShellExecute = $false
-          $fixture.StartInfo.RedirectStandardInput = $true
-          $fixture.StartInfo.RedirectStandardOutput = $true
-          if (!$fixture.Start()) { throw 'Cannot start history fixture' }
-          try {
-            $ready = $fixture.StandardOutput.ReadLineAsync()
-            if (!$ready.Wait(10000) -or $ready.Result -ne 'ready') { throw 'History fixture startup failed' }
-            $cli = 'cli\target\x86_64-pc-windows-msvc\release\burpctl.exe'
-            $instances = (& $cli instance list --format json | ConvertFrom-Json).result.items
-            $selectedFixture = @($instances | Where-Object { $_.project_id -eq 'fixture-project' })
-            if ($selectedFixture.Count -ne 1) { throw 'Expected one history fixture instance' }
-            .\verification\windows-history.ps1 -Java $fixture.StartInfo.FileName -Classes $classpath -Cli $cli -Instance $selectedFixture[0].instance_id
-          } finally {
-            if (!$fixture.HasExited) {
-              $fixture.StandardInput.WriteLine('stop')
-              if (!$fixture.WaitForExit(5000)) { $fixture.Kill(); $fixture.WaitForExit() }
-            }
-            $fixture.Dispose()
-          }
-          # This fixture checks expected nonzero CLI exit codes itself.
-          $PSNativeCommandUseErrorActionPreference = $false
-          .\verification\windows-partial.ps1 -Java (Join-Path $env:JAVA_HOME 'bin\java.exe') -Classpath $classpath -Cli 'cli\target\x86_64-pc-windows-msvc\release\burpctl.exe'
+        run: .\verification\windows-checks.ps1 -Classes (Join-Path $env:RUNNER_TEMP 'burpctl-checks')
 
-      - name: Check and package release
+      - name: Verify release artifacts
+        run: python verification/release-checks.py
+
+      - name: Stage release artifacts
         shell: python
-        env:
-          ARCHIVE: ${{ steps.version.outputs.archive }}
         run: |
-          import hashlib, os, pathlib, subprocess, sys
-          subprocess.run([sys.executable, 'verification/release-checks.py'], check=True)
-          archive = pathlib.Path(os.environ['RUNNER_TEMP']) / os.environ['ARCHIVE']
-          subprocess.run([sys.executable, 'scripts/package-release.py', '--output', str(archive)], check=True)
-          with archive.open('rb') as source:
-              digest = hashlib.file_digest(source, 'sha256').hexdigest()
-          archive.with_suffix('.zip.sha256').write_text(f'{digest}  {archive.name}\n', encoding='utf-8')
+          import os, pathlib, shutil
+          output = pathlib.Path(os.environ['RUNNER_TEMP']) / 'release'
+          output.mkdir()
+          shutil.copy2('cli/target/x86_64-pc-windows-msvc/release/burpctl.exe', output / 'burpctl.exe')
+          shutil.copy2('extension/build/libs/burpctl-extension.jar', output / 'burpctl-extension.jar')
 
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: burpctl-windows-x86_64
           path: |
-            ${{ runner.temp }}/${{ steps.version.outputs.archive }}
-            ${{ runner.temp }}/${{ steps.version.outputs.archive }}.sha256
+            ${{ runner.temp }}/release/burpctl.exe
+            ${{ runner.temp }}/release/burpctl-extension.jar
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
@@ -152,7 +119,8 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      - name: Download release artifacts
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: burpctl-windows-x86_64
           path: release
@@ -165,13 +133,18 @@ jobs:
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ github.ref_name }}
           VERSION: ${{ needs.build.outputs.version }}
-          ARCHIVE: ${{ needs.build.outputs.archive }}
           PRERELEASE: ${{ needs.build.outputs.prerelease }}
         run: |
           set -euo pipefail
-          (cd release && sha256sum --check "$ARCHIVE.sha256")
+          notes=$(gh api --method POST "repos/$GH_REPO/releases/generate-notes" \
+            -f tag_name="$RELEASE_TAG" --jq .body)
+          printf '%s\n' "$notes" | sed -n '/^\*\*Full Changelog\*\*: /p' > "$RUNNER_TEMP/release-notes.md"
+          if [[ ! -s "$RUNNER_TEMP/release-notes.md" ]]; then
+            printf '**Full Changelog**: https://github.com/%s/commits/%s\n' \
+              "$GH_REPO" "$RELEASE_TAG" > "$RUNNER_TEMP/release-notes.md"
+          fi
           flags=()
           if [[ "$PRERELEASE" == true ]]; then flags+=(--prerelease); fi
-          gh release create "$RELEASE_TAG" "release/$ARCHIVE" "release/$ARCHIVE.sha256" \
-            --repo "$GH_REPO" --verify-tag --draft --title "BurpCTL $VERSION" \
-            --generate-notes "${flags[@]}"
+          gh release create "$RELEASE_TAG" release/burpctl.exe release/burpctl-extension.jar \
+            --repo "$GH_REPO" --verify-tag --draft --title "$VERSION" \
+            --notes-file "$RUNNER_TEMP/release-notes.md" "${flags[@]}"

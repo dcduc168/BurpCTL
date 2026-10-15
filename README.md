@@ -6,7 +6,7 @@ BurpCTL `0.1.0` is the first release. It supports `status`, `instance list`, `hi
 
 ## Get started
 
-Build the [CLI and extension](#build-from-source), then:
+Download `burpctl.exe` and `burpctl-extension.jar` from the [latest release](https://github.com/dcduc168/BurpCTL/releases/latest), or [build from source](#build-from-source), then:
 
 1. Copy `burpctl.exe` to local NTFS and add its directory to Windows PATH. The MSVC build requires `VCRUNTIME140.dll`; loading the executable from a WSL share was slower on the tested host.
 2. Load `burpctl-extension.jar` as a Java extension in Burp. The extension needs Java 21 or later and Montoya 2026.7 APIs.
@@ -90,25 +90,25 @@ Outputs:
 - CLI: `cli/target/x86_64-pc-windows-msvc/release/burpctl.exe`
 - Extension: `extension/build/libs/burpctl-extension.jar`
 
-Package matching artifacts with Python 3.11 or later on Windows, or WSL with Windows interop:
+Validate matching artifacts with Python 3.11 or later on Windows, or WSL with Windows interop:
 
 ```sh
-python3 scripts/package-release.py --output BurpCTL-0.1.0.zip
+python3 scripts/check-release.py
 ```
 
-Packaging checks artifact versions and Java 21 bytecode, excludes bundled Montoya classes, writes SHA-256 checksums and removes its archive if writing fails. It never replaces an existing output.
+This checks CLI/JAR versions, Java 21 bytecode and that Montoya classes are not bundled.
 
 ## GitHub release builds
 
-The [release workflow](.github/workflows/release.yml) builds on Windows Server 2025 with Rust 1.98.1, Temurin 21.0.12 and the pinned Gradle wrapper. It checks the CLI, Java fixtures, native raw/Base64 transfers, interrupted exports and release packaging. Live Burp and Repeater UI verification remain manual.
+The [release workflow](.github/workflows/release.yml) builds on Windows Server 2025 with Rust 1.98.1, Temurin 21.0.12 and the pinned Gradle wrapper. It checks the CLI, Java fixtures, native raw/Base64 transfers, interrupted exports and release artifact validation. Live Burp and Repeater UI verification remain manual.
 
-Push a tag matching the product version, such as `v0.1.0`, to build `BurpCTL-0.1.0-windows-x86_64.zip` and its SHA-256 file. The workflow creates a draft GitHub release after the checks pass; versions with a prerelease suffix are marked as prereleases. Review and publish the draft separately. Existing releases are never overwritten; a failed run that already created a draft needs that draft removed before retrying.
+Push a tag matching the product version, such as `v0.1.0`, to build `burpctl.exe` and `burpctl-extension.jar` as separate release assets. The workflow creates a draft GitHub release after the checks pass; versions with a prerelease suffix are marked as prereleases. Release titles use only the version; notes contain the Full Changelog link. Review and publish the draft separately. Existing releases are never overwritten; a failed run that already created a draft needs that draft removed before retrying.
 
-For a build without creating a release, select **Release build → Run workflow** in GitHub Actions. Both files are retained as workflow artifacts for 14 days. The workflow must first exist on the default branch to enable this control.
+For a build without creating a release, select **Release build → Run workflow** in GitHub Actions. The two binaries are retained as workflow artifacts for 14 days. The workflow must first exist on the default branch to enable this control.
 
 ## Verification
 
-Checks cover authenticated Rust/Java UDS, permissions, scope, field selection, instance ambiguity and incomplete exports. Production-server fixtures passed 200 raw byte/hash comparisons and 100 Base64-prefix comparisons on Windows Temurin 21.0.12. Cargo fmt/check/clippy, four focused Rust checks on Linux and native Windows, Gradle build and release packaging checks passed.
+Checks cover authenticated Rust/Java UDS, permissions, scope, field selection, instance ambiguity and incomplete exports. Production-server fixtures passed 200 raw byte/hash comparisons and 100 Base64-prefix comparisons on Windows Temurin 21.0.12. Cargo fmt/check/clippy, four focused Rust checks on Linux and native Windows, Gradle build and release artifact validation checks passed.
 
 History uses filtered Montoya traversal. `--limit` bounds returned rows, not Burp's internal allocations. Retained extension RAM and per-operation Burp peak memory have not been isolated by measurement.
 
