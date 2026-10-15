@@ -128,11 +128,11 @@ Native Rust CLI → private instance metadata → authenticated AF_UNIX socket
 }
 ```
 
-Stable codes: `INVALID_ARGUMENT`, `UNKNOWN_METHOD`, `AUTH_FAILED`, `PERMISSION_DENIED`, `OUT_OF_SCOPE`, `FEATURE_UNAVAILABLE`, `INSTANCE_NOT_FOUND`, `AMBIGUOUS_INSTANCE`, `STALE_REFERENCE`, `INCOMPATIBLE_PROTOCOL`, `RESOURCE_LIMIT`, `OUTPUT_LIMIT`, `BUSY`, `TIMEOUT`, `NOT_FOUND`, `INTERNAL_ERROR`, `IPC_ERROR`, `PARTIAL_TRANSFER`.
+Stable codes: `INVALID_ARGUMENT`, `UNKNOWN_METHOD`, `AUTH_FAILED`, `PERMISSION_DENIED`, `OUT_OF_SCOPE`, `FEATURE_UNAVAILABLE`, `INSTANCE_NOT_FOUND`, `AMBIGUOUS_INSTANCE`, `AMBIGUOUS_REFERENCE`, `STALE_REFERENCE`, `INCOMPATIBLE_PROTOCOL`, `RESOURCE_LIMIT`, `OUTPUT_LIMIT`, `BUSY`, `TIMEOUT`, `NOT_FOUND`, `INTERNAL_ERROR`, `IPC_ERROR`, `PARTIAL_TRANSFER`.
 
 - Empty success: `{items: []}`, `ok=true`; never represent it as `NOT_FOUND` for a list operation.
 - A missing specific ID → `NOT_FOUND`; an explicitly outdated/other-project reference → `STALE_REFERENCE`; if the reason cannot be established, use `NOT_FOUND` without claiming stale.
-- A timeout does not prove backend work stopped. The CLI diagnostic reports that backend completion is unknown. The current operations do not send target traffic or mutate the project.
+- A timeout does not prove backend work stopped. The CLI diagnostic reports that backend completion is unknown. No operation sends target traffic. `repeater.open` creates a UI tab; after timeout its completion is unknown, so it must not be retried automatically.
 - No raw stack traces, secrets, HTTP bodies or token values in user-facing errors.
 
 ### 4.5 Streaming bytes for explicit exports
@@ -187,7 +187,7 @@ burpctl [--instance ID] [--format compact|json] [--max-bytes N] <command> [<subc
 - Stdout is only data. Stderr is human diagnostics; exit code reflects failure. A successful empty query still exits 0. Avoid ANSI colors in non-TTY output. No banners/progress in machine-readable output.
 - Raw requires `--output PATH` by default; no piping raw bytes to untrusted console. Output path resolved on CLI side, not accepted as arbitrary write path in Extension.
 - `history get <id>` requires `--instance` and `--project-id` from the source result. `status` reports the current instance and project IDs.
-- List filters are `--host`, `--method`, `--status` and `--path-contains`. Unsupported fields, flags and combinations fail explicitly. The CLI implements neither regex filters nor body matching.
+- List filters are `--host`, `--method`, `--status` and `--path-contains`. Unsupported fields, flags and combinations fail explicitly. History list filters do not inspect bodies or accept regex. `history match` separately searches one explicitly selected representation for literal bytes.
 
 ### Examples
 
@@ -200,6 +200,12 @@ burpctl --instance INSTANCE history get 123 --project-id PROJECT --fields id,sta
 burpctl --instance INSTANCE history get 123 --project-id PROJECT --part request.body --raw --output upload.bin
 burpctl scope check https://example.com/admin
 burpctl --instance INSTANCE repeater screenshot --output repeater.png
+burpctl --instance INSTANCE history stats --host example.com --by status
+burpctl --instance INSTANCE history endpoints --host example.com --limit 20 --fields method,path,count,sample_id
+burpctl --instance INSTANCE history match 123 --project-id PROJECT --part response.body --text "example"
+burpctl --instance INSTANCE sitemap issues list --host example.com --severity high
+burpctl --instance INSTANCE sitemap issues get ISSUE --project-id PROJECT --fields name,detail
+burpctl --instance INSTANCE repeater open 123 --project-id PROJECT --name "Review"
 ```
 
 ### Exit codes
@@ -221,11 +227,15 @@ Stderr error messages include stable error code; JSON mode emits valid structure
 
 Java enforces authentication, instance/project context, operation-specific permissions, history scope, output/body/image budgets and concurrency. Handcrafted IPC requests pass through the same dispatcher and policy as official CLI requests. There is no `--unsafe` bypass.
 
-Permissions are configured in a Montoya settings panel inside Burp Settings (search for `BurpCTL`). They remain in memory and reset on extension reload; there is no suite tab or settings persistence. Disabling metadata also revokes raw access. The panel is created once on the EDT when Burp requests its component; it has no polling or history queries.
+Permissions are configured in a Montoya settings panel inside Burp Settings (search for `BurpCTL`). They remain in memory and reset on extension reload; there is no suite tab or settings persistence. Disabling metadata also revokes raw access and Repeater-open permission; disabling raw revokes Repeater-open permission. The panel is created once on the EDT when Burp requests its component; it has no polling or history queries.
 
-Status and scope checks require authentication. History requires metadata permission and in-scope rows; byte retrieval also requires raw permission. Scope membership does not establish engagement authorization. The CLI writes an export only when the operator supplies an output path.
+Status and scope checks require authentication. Stats/endpoints use the history metadata grant without reading bodies. History requires metadata permission and in-scope rows; byte retrieval also requires raw permission. Scope membership does not establish engagement authorization. The CLI writes an export only when the operator supplies an output path.
 
 Screenshots require the independent `repeater_screenshot` permission (Settings: “Allow Repeater screenshots”), off by default and revoked on unload. This is a sensitive UI read, not a scope-filtered HTTP query: Montoya does not expose the selected Repeater request, so the extension cannot verify its scope. The opt-in permits Repeater pane content while its main tool is active or hidden, including headers, bodies, tab labels and out-of-scope data. History permissions remain independent. No URL supplied by a client is accepted as proof of the displayed request's identity or scope.
+
+Scanner issue reads require the independent `sitemap_issues` grant, off by default. It permits potentially sensitive issue metadata, HTML detail and remediation for in-scope issue base URLs, but never attached HTTP messages or Collaborator interactions. This build conservatively gates them to Professional; live API behavior still requires verification.
+
+Opening Repeater requires `repeater_open`, metadata and raw grants, all off by default. The CLI selects an existing history ID with source context; no arbitrary request file, host override or external input is accepted. The extension checks scope, project, size (32 MiB selected request) and grants immediately before `sendToRepeater(finalRequest,name)`. This call runs on a request worker and leaves network sending to the user. It can create a tab even if a later timeout/project change prevents a successful response; do not auto-retry. Screenshot remains independent.
 
 ### Operation contracts
 
@@ -239,7 +249,27 @@ Every operation accepts `params.max_bytes` (1,024 to 262,144; default 32,768), c
 | `scope.check` | Required `url`: HTTP(S), host required, at most 4,096 characters, no credentials/fragment/control characters | `{url,in_scope}`; authenticated membership query; no target traffic. |
 | `history.list` | `limit`: 1 to 100, default 10; `fields`; `filters` with exact case-insensitive `host`, exact case-sensitive `method`, HTTP `status` 100 to 599, literal `path_contains` | `{items:[...]}`; metadata permission plus per-row scope; one expensive operation at a time. |
 | `history.get` | Required `id`: 0 to 2,147,483,647; optional `fields`; optional `part`, `encoding`, `body_max_bytes` | `{item:{...}}` or approved stream; metadata permission; selected message/bytes additionally require raw permission. |
+| `history.stats` | Optional `filters` (same as list), `by=status|method` (default status) | `{by,matched,buckets}`; metadata and scope, full on-demand traversal with fixed buckets. |
+| `history.endpoints` | Optional `filters`, `limit` 1–100 (default 20), `fields` | `{items:[...]}`; metadata and scope, bounded unique service/method/path keys and sample references. |
+| `history.match` | Required `id`, `part`, exactly one of `text` or `base64`; optional `scan_max_bytes` 1–1,048,576 (default 65,536), `context_bytes` 0–256 (default 0) | `{matched,offset,inspected_bytes,size_bytes,search_complete}` plus optional bounded Base64 snippet; metadata/raw, scope, explicit source context. |
+| `sitemap.issues.list` | Optional `limit` 1–100 (default 10), `host`, `severity`, `confidence`, `fields` | `{items:[...]}`; independent issues grant, per-issue scope, Professional only. |
+| `sitemap.issues.get` | Required 64-character lowercase hex `id`; optional `fields` | `{item:{...}}`; issues grant, scope, Professional; explicit source instance/project required by CLI. Duplicate metadata references fail. |
+| `repeater.open` | Required history `id`; optional `name` (nonblank, at most 80 characters, no ISO controls) | `{opened:true,history_id}`; metadata/raw plus separate Repeater-open grant, scope, explicit source context. Creates a tab without sending HTTP. |
 | `repeater.screenshot` | None | Approved PNG stream; independent screenshot permission; current Repeater view in the main Burp window only. CLI requires `--output`; optional `--force`. |
+
+Derived history operations share the single expensive-query permit with history list/get/exports and issue reads. Stats/endpoints use `proxy().history(filter)` callbacks that aggregate and return false, avoiding a second retained result List. Callback state is synchronized for possible parallel invocation; this does not constrain Montoya's own traversal or allocations. Every matching row is scope-checked. Deadline is 20 seconds; expiration or revoked permission fails rather than publishing partial counts. No result is an atomic snapshot of a changing project.
+
+Stats return observed `matched` and counts grouped by exact status (100–599 plus `no_response` and `OTHER`) or fixed standard methods (`GET,HEAD,POST,PUT,DELETE,CONNECT,OPTIONS,TRACE,PATCH` plus `OTHER`). No arbitrary group keys, body access, total-history claim or cache. Empty counts succeed. `meta.atomic_snapshot=false`.
+
+Endpoints use exact method, case-folded service host, port, TLS and path without query as the unique key. Fields/defaults: `method,host,port,secure,path,count,sample_id`. `sample_id` is an arbitrary contributing history ID, not latest. At most `limit` keys are retained; an additional distinct key sets `meta.truncated=true` and `inventory_complete=false`. Counts continue for retained keys through the traversal, not just the first N rows. No exact total unique count or pagination is claimed. Method/host/path strings are capped at 64/1,024/8,192 characters; the retained sample scope URL is capped at 8,192. Overlong values fail `RESOURCE_LIMIT`, never normalize or truncate evidence paths. Query variants collapse into one key. Sample scope is rechecked before output; concurrent changes remain outside an atomic-snapshot guarantee.
+
+Match uses an exact byte needle: UTF-8 encoded `text` or decoded `base64`, length 1–4,096 bytes, no regex/case folding. KMP scans up to `scan_max_bytes` without copying the full message and stops on the first match. `offset` is zero-based or null. `search_complete=true` means a match was established or the whole representation was inspected; negative results with false apply only to the inspected prefix. `meta.truncated` reports uninspected bytes even after a positive match. Optional context returns `snippet`, `snippet_encoding:base64`, `snippet_offset`, at most 512 bytes within the allowed prefix; it may omit part of a long match. No snippet by default. The existing 32 MiB representation cap and missing-response errors apply; Montoya may materialize more than the scan prefix. Scope and raw permission are rechecked after search. Provenance includes source history ID, representation and `literal_byte_match` transformation.
+
+Issue list fields/defaults are `id,name,host,path,severity,confidence`; optional `port,secure`. Get additionally allows `detail,remediation`, with defaults `id,name,severity,confidence,detail,remediation`. Detail/remediation remain nullable HTML strings; they are untrusted data. Metadata strings are capped at 8,192 characters, detail/remediation at 65,536; over-budget output fails, never silently truncates. List filters are exact case-insensitive `host`, lowercase severity (`high,medium,low,information,false_positive`) and confidence (`certain,firm,tentative`), combined with AND. Scope uses each issue's validated HTTP(S) `baseUrl`; output path omits query. No scan is started.
+
+Montoya has no public stable audit-issue ID. Issue reference is lowercase SHA-256 of UTF-8 compact JSON array `[name,baseUrl,typeIndex,severity.name(),confidence.name(),service.host(),service.port(),service.secure()]`. It is metadata-derived, not a stable finding UUID. CLI get requires original `--instance` and `--project-id`. Metadata changes can yield `NOT_FOUND`; multiple distinct records with that fingerprint yield `AMBIGUOUS_REFERENCE` (exit 3), never an arbitrary detail. Duplicate callbacks for the same Java object are ignored for get. No ordinal, persistent identity cache or attached HTTP data is used. Get metadata always includes `issue_id` independently of field projection. List may expose duplicate fingerprints. Get scans to establish uniqueness before reading detail.
+
+Issue queries aggregate through `siteMap().issues(filter)` with `node.issues()` inside a serialized predicate and return false to avoid an additional matching-issues List. The returned metadata/detail buffers are bounded; node issue Lists and internal API allocation remain unbounded by CLI flags. The 20-second callback deadline, shared permit, permission and project checks apply. List selection cap is not proof of additional findings; live callback semantics and edition support are integration gates.
 
 Screenshot discovery starts from the documented `suiteFrame()` and inspects standard Swing containers on the EDT. It requires a unique main tab pane containing the exact English titles `Target`, `Proxy`, `Repeater`, and obtains the Repeater component directly without selecting it. Detached, minimized or unrecognized layouts fail `FEATURE_UNAVAILABLE`; a Repeater component with no usable dimensions also fails and asks the operator to open it once. Tree traversal is capped at 8,192 component/title visits and depth 32. The existing component dimensions/layout are used even when the main Repeater tab is hidden; no layout or visibility is forced. Only that viewport area is rendered; offscreen scrolled content and desktop overlays are excluded. The command does not navigate tabs, change viewport/layout or send traffic.
 

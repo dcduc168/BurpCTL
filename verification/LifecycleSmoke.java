@@ -79,16 +79,16 @@ public final class LifecycleSmoke {
                             "context", Map.of("instance_id", identity.get("instance_id"), "project_id", "fixture-project"));
                     var response = StatusSmoke.request(owned.resolve("s"), envelope);
                     var permissions = (Map<?, ?>)((Map<?, ?>)response.get("result")).get("permissions");
-                    StatusSmoke.require(permissions.equals(Map.of("history_metadata", false, "history_raw", false, "repeater_screenshot", false)), "Reload retained permissions");
+                    StatusSmoke.require(permissions.equals(Map.of("history_metadata", false, "history_raw", false, "repeater_screenshot", false, "sitemap_issues", false, "repeater_open", false)), "Reload retained permissions");
                     var boxes = new java.util.ArrayList<javax.swing.JCheckBox>();
                     SwingUtilities.invokeAndWait(() -> {
                         SettingsSmoke.collect(panel.get().uiComponent(), boxes);
-                        StatusSmoke.require(boxes.size() == 3, "Permission controls missing");
+                        StatusSmoke.require(boxes.size() == 5, "Permission controls missing");
                         boxes.forEach(box -> box.doClick(0));
                     });
                     response = StatusSmoke.request(owned.resolve("s"), envelope);
                     permissions = (Map<?, ?>)((Map<?, ?>)response.get("result")).get("permissions");
-                    StatusSmoke.require(permissions.equals(Map.of("history_metadata", true, "history_raw", true, "repeater_screenshot", true)), "Settings did not grant server policy");
+                    StatusSmoke.require(permissions.equals(Map.of("history_metadata", true, "history_raw", true, "repeater_screenshot", true, "sitemap_issues", true, "repeater_open", true)), "Settings did not grant server policy");
                     await(() -> Thread.getAllStackTraces().entrySet().stream()
                             .filter(entry -> entry.getKey().getName().equals("burpctl-client"))
                             .allMatch(entry -> java.util.Arrays.stream(entry.getValue()).anyMatch(frame ->

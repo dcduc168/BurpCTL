@@ -27,6 +27,16 @@ for name in ['status-request', 'history-list-response']:
     frame = bytes.fromhex((root / f'protocol/examples/{name}.frame.hex').read_text())
     assert struct.unpack('>I', frame[:4])[0] == len(frame) - 4
     assert frame[4] == 1 and frame[5:] == payload
+feature_controls = (root / 'protocol/examples/feature-requests.jsonl').read_bytes().splitlines()
+feature_frames = (root / 'protocol/examples/feature-requests.frame.hex').read_text().splitlines()
+assert len(feature_controls) == len(feature_frames) == 6
+for payload, encoded in zip(feature_controls, feature_frames):
+    frame = bytes.fromhex(encoded)
+    assert struct.unpack('>I', frame[:4])[0] == len(frame) - 4
+    assert frame[4] == 1 and frame[5:] == payload
+    assert json.loads(payload)['version'] == {'major': 1, 'minor': 0}
+assert {json.loads(payload)['method'] for payload in feature_controls} == {
+    'history.stats', 'history.endpoints', 'history.match', 'sitemap.issues.list', 'sitemap.issues.get', 'repeater.open'}
 frames = [bytes.fromhex(line) for line in (root / 'protocol/examples/raw-stream.frame.hex').read_text().splitlines()]
 controls = (root / 'protocol/examples/raw-stream.jsonl').read_bytes().splitlines()
 for frame in frames:

@@ -39,9 +39,9 @@ def line(process):
 
 
 @contextmanager
-def fixture(name, classpath):
+def fixture(name, classpath, *arguments):
     before = {item['instance_id'] for item in instances()}
-    process = subprocess.Popen(['java', '-Djava.awt.headless=true', '-cp', classpath, name],
+    process = subprocess.Popen(['java', '-Djava.awt.headless=true', '-cp', classpath, name, *arguments],
                                stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
     try:
         assert line(process) == 'ready', f'{name} startup failed'
@@ -69,10 +69,10 @@ with tempfile.TemporaryDirectory(prefix='bctl-check-') as directory:
     classes.mkdir()
     classpath = os.pathsep.join(map(str, [classes, root / 'extension/build/libs/burpctl-extension.jar', montoya[0]]))
     sources = ['StatusSmoke', 'TrafficFixture', 'HistorySmoke', 'HistoryServer', 'PartialSmokeServer',
-               'SettingsSmoke', 'LifecycleSmoke', 'ScreenshotSmoke']
+               'SettingsSmoke', 'LifecycleSmoke', 'ScreenshotSmoke', 'ReadToolsSmoke']
     subprocess.run(['javac', '--release', '21', '-cp', classpath, '-d', str(classes),
                     *[str(root / f'verification/{name}.java') for name in sources]], check=True, timeout=60)
-    for name in ['StatusSmoke', 'HistorySmoke', 'SettingsSmoke', 'LifecycleSmoke']:
+    for name in ['StatusSmoke', 'HistorySmoke', 'SettingsSmoke', 'LifecycleSmoke', 'ReadToolsSmoke']:
         subprocess.run(['java', '-Djava.awt.headless=true', '-cp', classpath, name], check=True, timeout=90)
     if args.screenshot:
         subprocess.run(['java', '-cp', classpath, 'ScreenshotSmoke'], check=True, timeout=40)
@@ -111,6 +111,33 @@ with tempfile.TemporaryDirectory(prefix='bctl-check-') as directory:
             call('status', expected=3)
             assert call(*common, 'status')['result']['instance_id'] == instance['instance_id']
         assert not list(directory.glob('*.part')), 'Partial exports retained'
+    with fixture('ReadToolsSmoke', classpath, 'serve') as (_, instance):
+        common = ['--instance', instance['instance_id'], '--format', 'json']
+        reference = ['--project-id', instance['project_id']]
+        status = call(*common, 'status')['result']
+        assert {'history.stats', 'history.endpoints', 'history.match', 'sitemap.issues.list', 'sitemap.issues.get', 'repeater.open'} <= set(status['methods'])
+        stats = call(*common, 'history', 'stats', '--by', 'method')['result']
+        assert stats['matched'] == 100 and stats['buckets'] == {'POST': 100}
+        endpoints = call(*common, 'history', 'endpoints', '--limit', 10, '--fields', 'path,count,sample_id')
+        assert endpoints['meta']['inventory_complete'] and len(endpoints['result']['items']) == 10
+        assert all(item['count'] == 10 for item in endpoints['result']['items'])
+        assert call(*common, 'history', 'endpoints', '--limit', 3)['meta']['truncated']
+        prefix = base64.b64encode(bytes([0])).decode()
+        match = call(*common, 'history', 'match', 0, *reference, '--part', 'request.body', '--base64', prefix)['result']
+        assert isinstance(match['matched'], bool) and 'search_complete' in match
+        call(*common, 'history', 'match', 0, *reference, '--part', 'request.body', '--text', '', expected=2)
+        call(*common, 'history', 'stats', '--by', 'path', expected=2)
+        call(*common, 'history', 'match', 0, '--project-id', 'wrong', '--part', 'request.body', '--text', 'x', expected=3)
+        call('history', 'match', 0, *reference, '--part', 'request.body', '--text', 'x', expected=2)
+        issue_list = call(*common, 'sitemap', 'issues', 'list', '--host', '127.0.0.1', '--severity', 'high')['result']['items']
+        assert len(issue_list) == 2 and all('detail' not in item for item in issue_list)
+        issue = call(*common, 'sitemap', 'issues', 'get', issue_list[0]['id'], *reference, '--fields', 'detail,remediation')['result']['item']
+        assert issue == {'detail': '<p>fixture detail</p>', 'remediation': None}
+        call(*common, 'sitemap', 'issues', 'get', issue_list[0]['id'], '--project-id', 'wrong', expected=3)
+        opened = call(*common, 'repeater', 'open', 0, *reference, '--name', 'fixture')
+        assert opened['result']['opened'] and opened['meta']['network_sent'] is False
+        call(*common, 'repeater', 'open', 0, *reference, '--name', 'bad\nname', expected=2)
+    print('PASS: native stats/endpoints/match/issues/UI-open commands and source-context/schema checks')
     print('PASS: native discovery/ambiguity, scope/projection, 200 raw hashes, 100 Base64 prefixes, no-clobber/force')
     with fixture('PartialSmokeServer', classpath) as (process, instance):
         output = directory / 'incomplete.bin'

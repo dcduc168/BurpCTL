@@ -132,6 +132,20 @@ public final class StatusSmoke {
             int beforeScreenshot = calls.get();
             require("PERMISSION_DENIED".equals(((Map<?, ?>)request(socket, screenshot).get("error")).get("code")), "Screenshot default denied");
             require(calls.get() == beforeScreenshot, "Denied screenshot invoked Montoya");
+            for (var operation : Map.<String, Map<String, Object>>of(
+                    "history.stats", Map.of(), "history.endpoints", Map.of(),
+                    "history.match", Map.of("id", 0L, "part", "request.body", "text", "x"),
+                    "sitemap.issues.list", Map.of(), "sitemap.issues.get", Map.of("id", "0".repeat(64)),
+                    "repeater.open", Map.of("id", 0L)).entrySet()) {
+                var denied = new java.util.LinkedHashMap<>(envelope);
+                denied.put("method", operation.getKey()); denied.put("params", operation.getValue());
+                int count = calls.get();
+                require("PERMISSION_DENIED".equals(((Map<?, ?>)request(socket, denied).get("error")).get("code")), "Default grant denied: " + operation.getKey());
+                require(calls.get() == count, "Denied operation reached Montoya: " + operation.getKey());
+                denied.put("params", Map.of("unsafe", true)); count = calls.get();
+                require("INVALID_ARGUMENT".equals(((Map<?, ?>)request(socket, denied).get("error")).get("code")), "Unknown option denied");
+                require(calls.get() == count, "Invalid schema reached Montoya");
+            }
             require(Server.EXTENSION_VERSION.equals(Server.class.getPackage().getImplementationVersion()), "Version comes from packaged build metadata");
             require(Server.EXTENSION_VERSION.equals(((Map<?, ?>)request(socket, envelope).get("result")).get("extension_version")), "Status reports packaged version");
             for (String input : java.util.List.of("{\"id\":1,\"part\":null}", "{\"id\":1,\"part\":\"response.body\",\"encoding\":null}")) {

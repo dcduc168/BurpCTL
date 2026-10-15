@@ -3,7 +3,7 @@ mod ipc;
 mod private_files;
 mod strict_json;
 
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use serde_json::{Value, json};
 use std::path::PathBuf;
 
@@ -39,7 +39,12 @@ enum Command {
         #[command(subcommand)]
         command: HistoryCommand,
     },
-    /// Capture the Repeater pane without switching tools or sending traffic.
+    /// Read existing scoped scanner findings; does not start scans.
+    Sitemap {
+        #[command(subcommand)]
+        command: SitemapCommand,
+    },
+    /// Open a history request or capture the Repeater pane without sending traffic.
     Repeater {
         #[command(subcommand)]
         command: RepeaterCommand,
@@ -64,17 +69,8 @@ enum HistoryCommand {
         /// Comma-separated fields; metadata: id,method,host,path,status,has_response,port,secure.
         #[arg(long, value_delimiter = ',')]
         fields: Option<Vec<String>>,
-        /// Exact service host, matched without case.
-        #[arg(long)]
-        host: Option<String>,
-        /// Exact final-request method (case-sensitive).
-        #[arg(long)]
-        method: Option<String>,
-        #[arg(long, value_parser = clap::value_parser!(u16).range(100..=599))]
-        status: Option<u16>,
-        /// Literal substring of path without its query string.
-        #[arg(long)]
-        path_contains: Option<String>,
+        #[command(flatten)]
+        filters: HistoryFilters,
     },
     /// Retrieve one ID using explicit source instance and project identity.
     Get {
@@ -107,6 +103,107 @@ enum HistoryCommand {
         #[arg(long, requires = "output")]
         force: bool,
     },
+    /// Count matching history by status or standard method; no HTTP bodies are read.
+    Stats {
+        #[arg(long, default_value = "status", value_parser = ["status", "method"])]
+        by: String,
+        #[command(flatten)]
+        filters: HistoryFilters,
+    },
+    /// Inventory unique service/method/path keys with counts and a sample history ID.
+    Endpoints {
+        #[arg(long, default_value_t = 20, value_parser = clap::value_parser!(u32).range(1..=100))]
+        limit: u32,
+        /// Fields: method,host,port,secure,path,count,sample_id.
+        #[arg(long, value_delimiter = ',')]
+        fields: Option<Vec<String>>,
+        #[command(flatten)]
+        filters: HistoryFilters,
+    },
+    /// Search one message prefix for literal UTF-8 or exact Base64 bytes.
+    Match {
+        #[arg(value_parser = clap::value_parser!(u32).range(0..=2147483647))]
+        id: u32,
+        #[arg(long)]
+        project_id: String,
+        #[arg(long, value_enum)]
+        part: Part,
+        #[arg(long, required_unless_present = "base64", conflicts_with = "base64")]
+        text: Option<String>,
+        #[arg(long, required_unless_present = "text", conflicts_with = "text")]
+        base64: Option<String>,
+        #[arg(long, default_value_t = 65536, value_parser = clap::value_parser!(u32).range(1..=1048576))]
+        scan_max_bytes: u32,
+        /// Optional Base64 evidence context; zero returns no snippet.
+        #[arg(long, default_value_t = 0, value_parser = clap::value_parser!(u32).range(0..=256))]
+        context_bytes: u32,
+    },
+}
+#[derive(Args)]
+struct HistoryFilters {
+    /// Exact service hostname, matched without case; omit scheme/port/path.
+    #[arg(long)]
+    host: Option<String>,
+    /// Exact case-sensitive final-request method.
+    #[arg(long)]
+    method: Option<String>,
+    #[arg(long, value_parser = clap::value_parser!(u16).range(100..=599))]
+    status: Option<u16>,
+    /// Literal path substring, excluding query; not a regex.
+    #[arg(long)]
+    path_contains: Option<String>,
+}
+impl HistoryFilters {
+    fn params(&self) -> Value {
+        let mut filters = json!({});
+        for (key, value) in [
+            ("host", &self.host),
+            ("method", &self.method),
+            ("path_contains", &self.path_contains),
+        ] {
+            if let Some(value) = value {
+                filters[key] = json!(value);
+            }
+        }
+        if let Some(status) = self.status {
+            filters["status"] = json!(status);
+        }
+        filters
+    }
+}
+#[derive(Subcommand)]
+enum SitemapCommand {
+    /// Read scanner findings already present in Site Map (Professional).
+    Issues {
+        #[command(subcommand)]
+        command: IssueCommand,
+    },
+}
+#[derive(Subcommand)]
+enum IssueCommand {
+    /// List metadata only; ordering is unspecified.
+    List {
+        #[arg(long, default_value_t = 10, value_parser = clap::value_parser!(u32).range(1..=100))]
+        limit: u32,
+        #[arg(long)]
+        host: Option<String>,
+        #[arg(long, value_parser = ["high", "medium", "low", "information", "false_positive"])]
+        severity: Option<String>,
+        #[arg(long, value_parser = ["certain", "firm", "tentative"])]
+        confidence: Option<String>,
+        /// Fields: id,name,host,path,port,secure,severity,confidence.
+        #[arg(long, value_delimiter = ',')]
+        fields: Option<Vec<String>>,
+    },
+    /// Resolve a metadata fingerprint and read details; duplicate fingerprints fail.
+    Get {
+        id: String,
+        #[arg(long)]
+        project_id: String,
+        /// Metadata fields plus detail,remediation.
+        #[arg(long, value_delimiter = ',')]
+        fields: Option<Vec<String>>,
+    },
 }
 #[derive(Clone, Copy, ValueEnum)]
 enum Part {
@@ -133,6 +230,15 @@ enum ScopeCommand {
 }
 #[derive(Subcommand)]
 enum RepeaterCommand {
+    /// Copy an in-scope history request into a Repeater tab; does not send it.
+    Open {
+        #[arg(value_parser = clap::value_parser!(u32).range(0..=2147483647))]
+        id: u32,
+        #[arg(long)]
+        project_id: String,
+        #[arg(long)]
+        name: Option<String>,
+    },
     /// Save the current main-window Repeater view as a verified PNG.
     Screenshot {
         #[arg(long)]
@@ -149,7 +255,9 @@ enum InstanceCommand {
 fn code_exit(code: &str) -> i32 {
     match code {
         "INVALID_ARGUMENT" => 2,
-        "INSTANCE_NOT_FOUND" | "AMBIGUOUS_INSTANCE" | "STALE_REFERENCE" => 3,
+        "INSTANCE_NOT_FOUND" | "AMBIGUOUS_INSTANCE" | "AMBIGUOUS_REFERENCE" | "STALE_REFERENCE" => {
+            3
+        }
         "AUTH_FAILED" | "PERMISSION_DENIED" | "OUT_OF_SCOPE" => 4,
         "FEATURE_UNAVAILABLE" | "INCOMPATIBLE_PROTOCOL" | "UNKNOWN_METHOD" => 5,
         "BUSY" | "TIMEOUT" | "RESOURCE_LIMIT" | "OUTPUT_LIMIT" => 6,
@@ -178,10 +286,23 @@ fn run(cli: &Cli) -> Result<Value, &'static str> {
             json!({"version":{"major":1,"minor":0},"id":"local","ok":true,"result":{"items":items},"meta":{"complete":true,"truncated":false}}),
         );
     }
-    if let Command::History {
-        command: HistoryCommand::Get { project_id, .. },
-    } = &cli.command
-    {
+    let source_project = match &cli.command {
+        Command::History {
+            command:
+                HistoryCommand::Get { project_id, .. } | HistoryCommand::Match { project_id, .. },
+        }
+        | Command::Repeater {
+            command: RepeaterCommand::Open { project_id, .. },
+        }
+        | Command::Sitemap {
+            command:
+                SitemapCommand::Issues {
+                    command: IssueCommand::Get { project_id, .. },
+                },
+        } => Some(project_id),
+        _ => None,
+    };
+    if let Some(project_id) = source_project {
         if cli.instance.is_none() {
             return Err("INVALID_ARGUMENT");
         }
@@ -210,30 +331,111 @@ fn run(cli: &Cli) -> Result<Value, &'static str> {
                 HistoryCommand::List {
                     limit,
                     fields,
-                    host,
-                    method,
-                    status,
-                    path_contains,
+                    filters,
+                },
+        }
+        | Command::History {
+            command:
+                HistoryCommand::Endpoints {
+                    limit,
+                    fields,
+                    filters,
                 },
         } => {
-            let mut filters = json!({});
-            for (name, value) in [
-                ("host", host),
-                ("method", method),
-                ("path_contains", path_contains),
-            ] {
-                if let Some(value) = value {
-                    filters[name] = json!(value);
-                }
-            }
-            if let Some(value) = status {
-                filters["status"] = json!(value);
-            }
-            let mut params = json!({"limit":limit,"filters":filters,"max_bytes":cli.max_bytes});
+            let mut params =
+                json!({"limit":limit,"filters":filters.params(),"max_bytes":cli.max_bytes});
             if let Some(value) = fields {
                 params["fields"] = json!(value);
             }
-            ("history.list", params)
+            (
+                if matches!(
+                    &cli.command,
+                    Command::History {
+                        command: HistoryCommand::Endpoints { .. }
+                    }
+                ) {
+                    "history.endpoints"
+                } else {
+                    "history.list"
+                },
+                params,
+            )
+        }
+        Command::History {
+            command: HistoryCommand::Stats { by, filters },
+        } => (
+            "history.stats",
+            json!({"by":by,"filters":filters.params(),"max_bytes":cli.max_bytes}),
+        ),
+        Command::History {
+            command:
+                HistoryCommand::Match {
+                    id,
+                    part,
+                    text,
+                    base64,
+                    scan_max_bytes,
+                    context_bytes,
+                    ..
+                },
+        } => {
+            let mut params = json!({"id":id,"part":part.name(),"scan_max_bytes":scan_max_bytes,"context_bytes":context_bytes,"max_bytes":cli.max_bytes});
+            if let Some(text) = text {
+                params["text"] = json!(text);
+            }
+            if let Some(base64) = base64 {
+                params["base64"] = json!(base64);
+            }
+            ("history.match", params)
+        }
+        Command::Sitemap {
+            command:
+                SitemapCommand::Issues {
+                    command:
+                        IssueCommand::List {
+                            limit,
+                            host,
+                            severity,
+                            confidence,
+                            fields,
+                        },
+                },
+        } => {
+            let mut params = json!({"limit":limit,"max_bytes":cli.max_bytes});
+            for (key, value) in [
+                ("host", host),
+                ("severity", severity),
+                ("confidence", confidence),
+            ] {
+                if let Some(value) = value {
+                    params[key] = json!(value);
+                }
+            }
+            if let Some(fields) = fields {
+                params["fields"] = json!(fields);
+            }
+            ("sitemap.issues.list", params)
+        }
+        Command::Sitemap {
+            command:
+                SitemapCommand::Issues {
+                    command: IssueCommand::Get { id, fields, .. },
+                },
+        } => {
+            let mut params = json!({"id":id,"max_bytes":cli.max_bytes});
+            if let Some(fields) = fields {
+                params["fields"] = json!(fields);
+            }
+            ("sitemap.issues.get", params)
+        }
+        Command::Repeater {
+            command: RepeaterCommand::Open { id, name, .. },
+        } => {
+            let mut params = json!({"id":id,"max_bytes":cli.max_bytes});
+            if let Some(name) = name {
+                params["name"] = json!(name);
+            }
+            ("repeater.open", params)
         }
         Command::History {
             command:
@@ -275,7 +477,8 @@ fn run(cli: &Cli) -> Result<Value, &'static str> {
         Command::Repeater {
             command: RepeaterCommand::Screenshot { .. },
         } => ("repeater.screenshot", json!({"max_bytes":cli.max_bytes})),
-        _ => ("status", json!({"max_bytes":cli.max_bytes})),
+        Command::Status => ("status", json!({"max_bytes":cli.max_bytes})),
+        Command::Instance { .. } => unreachable!("discovery returned above"),
     };
     let destination = match &cli.command {
         Command::History {

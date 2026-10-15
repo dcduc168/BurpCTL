@@ -8,6 +8,9 @@ import dev.burpctl.security.Policy;
 import dev.burpctl.features.Scope;
 import dev.burpctl.features.History;
 import dev.burpctl.features.Screenshot;
+import dev.burpctl.features.HistorySummary;
+import dev.burpctl.features.MessageMatch;
+import dev.burpctl.features.Issues;
 import java.io.IOException;
 import java.net.StandardProtocolFamily;
 import java.net.UnixDomainSocketAddress;
@@ -33,7 +36,10 @@ public final class Server implements AutoCloseable {
             Server.class.getPackage().getImplementationVersion(), "development");
     private final MontoyaApi api;
     private final Policy policy;
+    private static final java.util.List<String> METHODS = java.util.List.of("status", "scope.check", "history.list", "history.get",
+            "history.stats", "history.endpoints", "history.match", "sitemap.issues.list", "sitemap.issues.get", "repeater.open", "repeater.screenshot");
     private final History history;
+    private final Issues issues;
     private final Screenshot screenshot;
     private final Set<Frames> activeFrames = ConcurrentHashMap.newKeySet();
     private final Set<SocketChannel> clients = ConcurrentHashMap.newKeySet();
@@ -46,7 +52,14 @@ public final class Server implements AutoCloseable {
     private ThreadPoolExecutor rejector;
     private volatile boolean closed;
     public Server(MontoyaApi api) { this(api, new Policy()); }
-    public Server(MontoyaApi api, Policy policy) { this.api = api; this.policy = policy; this.history = new History(api, policy); this.screenshot = new Screenshot(api, policy); }
+    public Server(MontoyaApi api, Policy policy) {
+        this.api = api;
+        this.policy = policy;
+        var scan = new java.util.concurrent.Semaphore(1);
+        this.history = new History(api, policy, scan);
+        this.issues = new Issues(api, policy, scan);
+        this.screenshot = new Screenshot(api, policy);
+    }
     private static String random(int length) {
         byte[] bytes = new byte[length]; new SecureRandom().nextBytes(bytes);
         return HexFormat.of().formatHex(bytes);
@@ -130,12 +143,9 @@ public final class Server implements AutoCloseable {
                                 index -> export.bytes()[index], this::checkScreenshot);
                     }
                 } else {
-                    if (response instanceof Map<?, ?> envelope && Boolean.TRUE.equals(envelope.get("ok")) &&
-                            request.get("method") instanceof String method && method.startsWith("history.")) {
-                        try {
-                            policy.requireMetadata();
-                            if (request.get("params") instanceof Map<?, ?> params && params.containsKey("part")) policy.requireRaw();
-                        } catch (Fault e) { response = error(id, e.code); }
+                    if (response instanceof Map<?, ?> envelope && Boolean.TRUE.equals(envelope.get("ok"))) {
+                        try { checkOperation((String)request.get("method"), object(request.get("params"))); }
+                        catch (Fault e) { response = error(id, e.code); }
                     }
                     frames.write(response);
                 }
@@ -161,37 +171,57 @@ public final class Server implements AutoCloseable {
         long budget = params.getOrDefault("max_bytes", 32768L) instanceof Long number ? number : -1;
         if (budget < 1024 || budget > Frames.MAX_PAYLOAD) throw new Fault("INVALID_ARGUMENT");
         if (!(request.get("method") instanceof String method)) throw new Fault("INVALID_ARGUMENT");
-        if (!java.util.Set.of("status", "scope.check", "history.list", "history.get", "repeater.screenshot").contains(method)) throw new Fault("UNKNOWN_METHOD");
+        if (!METHODS.contains(method)) throw new Fault("UNKNOWN_METHOD");
         keys(params, switch (method) {
             case "scope.check" -> Set.of("max_bytes", "url");
             case "history.list" -> Set.of("max_bytes", "limit", "fields", "filters");
             case "history.get" -> Set.of("max_bytes", "id", "fields", "part", "encoding", "body_max_bytes");
+            case "history.stats" -> Set.of("max_bytes", "filters", "by");
+            case "history.endpoints" -> Set.of("max_bytes", "filters", "limit", "fields");
+            case "history.match" -> Set.of("max_bytes", "id", "part", "text", "base64", "scan_max_bytes", "context_bytes");
+            case "sitemap.issues.list" -> Set.of("max_bytes", "limit", "fields", "host", "severity", "confidence");
+            case "sitemap.issues.get" -> Set.of("max_bytes", "id", "fields");
+            case "repeater.open" -> Set.of("max_bytes", "id", "name");
             default -> Set.of("max_bytes");
         });
         if (method.equals("history.list") || method.equals("history.get")) History.validate(params, method.equals("history.get"));
         if (method.equals("scope.check")) Scope.url(params.get("url"));
-        if (method.startsWith("history.")) policy.requireMetadata();
-        if (method.equals("history.get") && params.containsKey("part")) policy.requireRaw();
-        if (method.equals("repeater.screenshot")) policy.requireScreenshot();
-        if (!project.equals(api.project().id())) throw new Fault("STALE_REFERENCE");
+        if (method.equals("history.stats") || method.equals("history.endpoints")) HistorySummary.validate(params, method.equals("history.endpoints"));
+        if (method.equals("history.match")) MessageMatch.needle(params);
+        if (method.startsWith("sitemap.issues.")) Issues.validate(params, method.equals("sitemap.issues.get"));
+        if (method.equals("repeater.open")) History.validateOpen(params);
+        checkOperation(method, params);
         if (method.equals("repeater.screenshot")) return new ScreenshotResponse(id, screenshot.capture(this::checkScreenshot), (int)budget);
         Object result;
         var meta = new java.util.LinkedHashMap<String, Object>(Map.of("complete", true, "truncated", false));
         if (method.equals("scope.check")) result = new Scope(api).check(params);
-        else if (method.equals("history.list") || method.equals("history.get")) {
-            var query = history.query(params, method.equals("history.get"));
+        else if (method.startsWith("history.") || method.startsWith("sitemap.issues.") || method.equals("repeater.open")) {
+            var query = switch (method) {
+                case "history.stats", "history.endpoints" -> history.summary(params, method.equals("history.endpoints"));
+                case "history.match" -> history.match(params);
+                case "sitemap.issues.list", "sitemap.issues.get" -> issues.query(params, method.equals("sitemap.issues.get"));
+                case "repeater.open" -> history.openRepeater(params, () -> checkOperation(method, params));
+                default -> history.query(params, method.equals("history.get"));
+            };
             if (query.result() instanceof History.Export export) return new RawResponse(id, export, (int)budget);
             result = query.result(); meta.putAll(query.meta());
             meta.put("provenance", Map.of("instance_id", instance, "project_id", project));
         } else result = Map.of("instance_id", instance, "project_id", project, "extension_version", EXTENSION_VERSION,
-                "burp_version", api.burpSuite().version().toString(), "methods", java.util.List.of("status", "scope.check", "history.list", "history.get", "repeater.screenshot"),
-                "permissions", Map.of("history_metadata", policy.metadata.get(), "history_raw", policy.raw.get(), "repeater_screenshot", policy.screenshot.get()));
-        if (!project.equals(api.project().id())) throw new Fault("STALE_REFERENCE");
-        if (method.startsWith("history.")) policy.requireMetadata();
-        if (method.equals("history.get") && params.containsKey("part")) policy.requireRaw();
+                "burp_version", api.burpSuite().version().toString(), "methods", METHODS,
+                "permissions", Map.of("history_metadata", policy.metadata.get(), "history_raw", policy.raw.get(), "repeater_screenshot", policy.screenshot.get(), "sitemap_issues", policy.issues.get(), "repeater_open", policy.repeaterOpen.get()));
+        checkOperation(method, params);
         var response = Map.of("version", VERSION, "id", id, "ok", true, "result", result, "meta", meta);
         Json.bytes(response, (int)budget);
         return response;
+    }
+    private void checkOperation(String method, Map<String, Object> params) {
+        if (closed) throw new Fault("FEATURE_UNAVAILABLE");
+        if (method.startsWith("history.")) policy.requireMetadata();
+        if ((method.equals("history.get") && params.containsKey("part")) || method.equals("history.match") || method.equals("repeater.open")) policy.requireRaw();
+        if (method.startsWith("sitemap.issues.")) policy.requireIssues();
+        if (method.equals("repeater.open")) policy.requireRepeaterOpen();
+        if (method.equals("repeater.screenshot")) policy.requireScreenshot();
+        if (!project.equals(api.project().id())) throw new Fault("STALE_REFERENCE");
     }
     private record RawResponse(String id, History.Export export, int budget) {}
     private record ScreenshotResponse(String id, Screenshot.Export export, int budget) {}

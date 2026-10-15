@@ -17,18 +17,22 @@ public final class History {
     public static final Set<String> FIELDS = Set.of("id", "method", "host", "path", "status", "has_response", "port", "secure");
     private final MontoyaApi api;
     private final Policy policy;
-    private final Semaphore scan = new Semaphore(1);
-    public History(MontoyaApi api, Policy policy) { this.api = api; this.policy = policy; }
+    private final Semaphore scan;
+    public History(MontoyaApi api, Policy policy) { this(api, policy, new Semaphore(1)); }
+    public History(MontoyaApi api, Policy policy, Semaphore scan) { this.api = api; this.policy = policy; this.scan = scan; }
     public static long integer(Object value, long minimum, long maximum) {
         if (!(value instanceof Long number) || number < minimum || number > maximum) throw new Fault("INVALID_ARGUMENT");
         return number;
     }
     public static List<String> fields(Map<String, Object> params) {
-        Object supplied = params.getOrDefault("fields", DEFAULT_FIELDS);
-        if (!(supplied instanceof List<?> fields) || fields.isEmpty() || fields.size() > FIELDS.size()) throw new Fault("INVALID_ARGUMENT");
+        return fields(params, DEFAULT_FIELDS, FIELDS);
+    }
+    public static List<String> fields(Map<String, Object> params, List<String> defaults, Set<String> allowed) {
+        Object supplied = params.getOrDefault("fields", defaults);
+        if (!(supplied instanceof List<?> fields) || fields.isEmpty() || fields.size() > allowed.size()) throw new Fault("INVALID_ARGUMENT");
         var result = new ArrayList<String>();
         for (Object field : fields) {
-            if (!(field instanceof String name) || !FIELDS.contains(name) || result.contains(name)) throw new Fault("INVALID_ARGUMENT");
+            if (!(field instanceof String name) || !allowed.contains(name) || result.contains(name)) throw new Fault("INVALID_ARGUMENT");
             result.add(name);
         }
         return result;
@@ -41,16 +45,19 @@ public final class History {
         }
         else {
             integer(params.getOrDefault("limit", 10L), 1, 100);
-            var filters = filters(params);
-            if (!Set.of("host", "method", "status", "path_contains").containsAll(filters.keySet())) throw new Fault("INVALID_ARGUMENT");
-            if (filters.containsKey("status")) integer(filters.get("status"), 100, 599);
-            for (String name : List.of("host", "method", "path_contains")) if (filters.containsKey(name)) {
-                Object value = filters.get(name);
-                if (!(value instanceof String text) || text.isEmpty() || text.length() > 1024) throw new Fault("INVALID_ARGUMENT");
-            }
+            validateFilters(params);
         }
     }
-    private static Map<String, Object> filters(Map<String, Object> params) {
+    public static void validateFilters(Map<String, Object> params) {
+        var filters = filters(params);
+        if (!Set.of("host", "method", "status", "path_contains").containsAll(filters.keySet())) throw new Fault("INVALID_ARGUMENT");
+        if (filters.containsKey("status")) integer(filters.get("status"), 100, 599);
+        for (String name : List.of("host", "method", "path_contains")) if (filters.containsKey(name)) {
+            Object value = filters.get(name);
+            if (!(value instanceof String text) || text.isEmpty() || text.length() > 1024) throw new Fault("INVALID_ARGUMENT");
+        }
+    }
+    static Map<String, Object> filters(Map<String, Object> params) {
         Object value = params.getOrDefault("filters", Map.of());
         if (!(value instanceof Map<?, ?>)) throw new Fault("INVALID_ARGUMENT");
         @SuppressWarnings("unchecked") var filters = (Map<String, Object>) value;
@@ -60,7 +67,7 @@ public final class History {
         try { return api.scope().isInScope(row.finalRequest().url()); }
         catch (burp.api.montoya.http.message.requests.MalformedRequestException e) { return false; }
     }
-    private boolean matches(ProxyHttpRequestResponse row, Map<String, Object> filters) {
+    boolean matches(ProxyHttpRequestResponse row, Map<String, Object> filters) {
         var request = row.finalRequest();
         if (filters.containsKey("host") && !request.httpService().host().equalsIgnoreCase((String)filters.get("host"))) return false;
         if (filters.containsKey("method") && !request.method().equals(filters.get("method"))) return false;
@@ -76,29 +83,7 @@ public final class History {
         boolean exported = false;
         try {
             int limit = get ? 1 : (int)integer(params.getOrDefault("limit", 10L), 1, 100);
-            var accepted = new AtomicInteger();
-            var filters = get ? Map.<String, Object>of() : filters(params);
-            long deadline = System.nanoTime() + 20_000_000_000L;
-            var denied = new java.util.concurrent.atomic.AtomicBoolean();
-            var expired = new java.util.concurrent.atomic.AtomicBoolean();
-            var rows = api.proxy().history(row -> {
-                if (System.nanoTime() >= deadline) { expired.set(true); return false; }
-                if (!policy.metadata.get() || accepted.get() >= limit) return false;
-                if (get && row.id() != (Long)params.get("id")) return false;
-                if (get && !inScope(row)) { denied.set(true); return false; }
-                try { if (!get && !matches(row, filters)) return false; }
-                catch (burp.api.montoya.http.message.requests.MalformedRequestException e) { return false; }
-                int count;
-                do {
-                    count = accepted.get();
-                    if (count >= limit) return false;
-                } while (!accepted.compareAndSet(count, count + 1));
-                return true;
-            });
-            policy.requireMetadata();
-            if (expired.get() || System.nanoTime() >= deadline) throw new Fault("TIMEOUT");
-            if (denied.get()) throw new Fault("OUT_OF_SCOPE");
-            if (rows.size() > limit) throw new Fault("RESOURCE_LIMIT");
+            var rows = select(params, get, limit);
             if (get && params.containsKey("part")) {
                 if (rows.isEmpty()) throw new Fault("NOT_FOUND");
                 var row = rows.get(0);
@@ -127,9 +112,75 @@ public final class History {
             if (get && items.isEmpty()) throw new Fault("NOT_FOUND");
             var result = get ? Map.of("item", items.get(0)) : Map.of("items", items);
             return new Query(result, Map.of("complete", true, "truncated", false,
-                    "ordering", "unspecified", "selection_limit_reached", accepted.get() == limit,
+                    "ordering", "unspecified", "selection_limit_reached", rows.size() == limit,
                     "source", "proxy_history", "representation", "final_request", "path_excludes_query", true));
         } finally { if (!exported) scan.release(); }
+    }
+    private List<ProxyHttpRequestResponse> select(Map<String, Object> params, boolean get, int limit) {
+        var accepted = new AtomicInteger();
+        var filters = get ? Map.<String, Object>of() : filters(params);
+        long deadline = System.nanoTime() + 20_000_000_000L;
+        var denied = new java.util.concurrent.atomic.AtomicBoolean();
+        var expired = new java.util.concurrent.atomic.AtomicBoolean();
+        var rows = api.proxy().history(row -> {
+            if (System.nanoTime() >= deadline) { expired.set(true); return false; }
+            if (!policy.metadata.get() || accepted.get() >= limit) return false;
+            if (get && row.id() != (Long)params.get("id")) return false;
+            if (get && !inScope(row)) { denied.set(true); return false; }
+            try { if (!get && !matches(row, filters)) return false; }
+            catch (burp.api.montoya.http.message.requests.MalformedRequestException e) { return false; }
+            int count;
+            do {
+                count = accepted.get();
+                if (count >= limit) return false;
+            } while (!accepted.compareAndSet(count, count + 1));
+            return true;
+        });
+        policy.requireMetadata();
+        if (expired.get() || System.nanoTime() >= deadline) throw new Fault("TIMEOUT");
+        if (denied.get()) throw new Fault("OUT_OF_SCOPE");
+        if (rows.size() > limit) throw new Fault("RESOURCE_LIMIT");
+        return rows;
+    }
+    private Query withEntry(Map<String, Object> params, java.util.function.Function<ProxyHttpRequestResponse, Query> action) {
+        policy.requireRaw();
+        integer(params.get("id"), 0, Integer.MAX_VALUE);
+        if (!scan.tryAcquire()) throw new Fault("BUSY");
+        try {
+            var rows = select(params, true, 1);
+            if (rows.isEmpty()) throw new Fault("NOT_FOUND");
+            var row = rows.get(0);
+            if (!inScope(row)) throw new Fault("OUT_OF_SCOPE");
+            policy.requireRaw();
+            var result = action.apply(row);
+            policy.requireRaw();
+            if (!inScope(row)) throw new Fault("OUT_OF_SCOPE");
+            return result;
+        } finally { scan.release(); }
+    }
+    public Query summary(Map<String, Object> params, boolean endpoints) {
+        return HistorySummary.query(api, policy, scan, this, params, endpoints);
+    }
+    public Query match(Map<String, Object> params) {
+        var needle = MessageMatch.needle(params);
+        return withEntry(params, row -> MessageMatch.query(row, params, needle));
+    }
+    public Query openRepeater(Map<String, Object> params, Runnable check) {
+        validateOpen(params);
+        policy.requireRepeaterOpen();
+        return withEntry(params, row -> {
+            var request = row.finalRequest();
+            if (request.toByteArray().length() > 32 * 1024 * 1024) throw new Fault("RESOURCE_LIMIT");
+            check.run();
+            api.repeater().sendToRepeater(request, (String)params.get("name"));
+            return new Query(Map.of("opened", true, "history_id", row.id()),
+                    Map.of("source", "proxy_history", "history_id", row.id(), "representation", "final_request", "network_sent", false));
+        });
+    }
+    public static void validateOpen(Map<String, Object> params) {
+        integer(params.get("id"), 0, Integer.MAX_VALUE);
+        if (params.containsKey("name") && (!(params.get("name") instanceof String name) || name.isBlank() || name.length() > 80
+                || name.chars().anyMatch(Character::isISOControl))) throw new Fault("INVALID_ARGUMENT");
     }
     public record Query(Object result, Map<String, Object> meta) {}
     public record Export(burp.api.montoya.core.ByteArray bytes, String part, Semaphore scan, Policy policy,
