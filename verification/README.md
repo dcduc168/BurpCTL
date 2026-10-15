@@ -55,7 +55,14 @@ Use existing authorized history for read checks. `TrafficFixture populate` is av
 
 ## Resources
 
+The retained process-resource helpers are Windows-specific. Set `JAVA_HOME` to the JDK, then:
+
 ```powershell
+$cli = (Resolve-Path 'cli\target\x86_64-pc-windows-msvc\release\burpctl.exe').Path
+$java = Join-Path $env:JAVA_HOME 'bin\java.exe'
+$javac = Join-Path $env:JAVA_HOME 'bin\javac.exe'
+$classes = Join-Path $env:TEMP 'burpctl-profiling'
+New-Item -ItemType Directory -Force $classes | Out-Null
 .\verification\windows-bench.ps1 -Cli $cli
 & $javac -source 21 -target 21 --add-exports jdk.internal.jvmstat/sun.jvmstat.monitor=ALL-UNNAMED -d $classes verification\PerfSnapshot.java
 .\verification\windows-resources.ps1 -Java $java -Classes $classes -BurpPid BURP_PID -Samples 31 -IntervalSeconds 10 -Phase unloaded

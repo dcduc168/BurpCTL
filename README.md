@@ -70,7 +70,7 @@ Filtering and field selection run in Java before serialization. `path` excludes 
 
 Compact output is the default. Use `--format json` to retain the protocol envelope. Stdout carries results, stderr carries diagnostics, and exit codes distinguish denial, timeout and incomplete export. See the [protocol reference](protocol/SPEC.md) for fields, budgets and errors.
 
-Each instance uses a token and current-user NTFS ACLs under `%LOCALAPPDATA%\burpctl\r`. Startup fails if ACL setup fails or the socket path exceeds 100 UTF-8 bytes. Discovery checks liveness through authenticated status calls; it excludes stale entries and leaves other instances' files alone. ACLs and tokens do not isolate BurpCTL from malicious processes running as the same user.
+Each instance uses a token and private runtime files: current-user NTFS ACLs under `%LOCALAPPDATA%\burpctl\r` on Windows, or directories with mode `0700` and files/sockets with mode `0600` under the canonical `/tmp/burpctl-<uid>/r` on Linux/macOS. Startup rejects unsafe permissions and socket paths above 100 UTF-8 bytes. Discovery authenticates live instances, excludes stale entries and leaves other instances' files alone. Filesystem permissions and tokens do not isolate BurpCTL from malicious same-user processes.
 
 The [BurpCTL Agent Skill](skills/burpctl/SKILL.md) covers instance selection and authorized evidence retrieval.
 
@@ -115,13 +115,13 @@ For a build without creating a release, select **Release → Run workflow** in G
 
 ## Verification
 
-Checks cover authenticated Rust/Java UDS, permissions, scope, field selection, instance ambiguity and incomplete exports. Production-server fixtures passed 200 raw byte/hash comparisons and 100 Base64-prefix comparisons on Windows Temurin 21.0.12. Cargo fmt/check/clippy, four focused Rust checks on Linux and native Windows, Gradle build and release artifact validation checks passed.
+Release CI runs native Rust checks and Java 21 production-server fixtures on all five platform/architecture combinations. Each runner checks authenticated UDS, private runtime files, scope, exact field selection, ambiguous instances, 200 raw byte/hash comparisons, 100 Base64 prefixes and interrupted-export cleanup.
 
 History uses filtered Montoya traversal. `--limit` bounds returned rows, not Burp's internal allocations. Retained extension RAM and per-operation Burp peak memory have not been isolated by measurement.
 
-Production-entry-point fixtures passed 20 initialized unload/reload cycles and 20 immediate-unload races, including a socket waiting for a partial frame. These ran on the bundled Windows Java 26 runtime with Java 21 bytecode.
+Production-entry-point fixtures exercise 20 initialized unload/reload cycles and 20 immediate-unload races, including a socket waiting for a partial frame. These synthetic checks do not establish actual Burp loading or UI behavior. Live Burp checks so far used Professional 2026.10 on Windows; Linux/macOS Burp integration remains unverified.
 
-Other open checks: live Burp on Linux/macOS, Community edition, real Burp running Java 21, multiple real Burp windows, live HTTP/2/gzip, twenty real reloads, abrupt JVM crash recovery and Windows path races. Fixture checks do not establish those integrations.
+Other open checks: Community edition, real Burp running Java 21, multiple real Burp windows, live HTTP/2/gzip, twenty real reloads, abrupt JVM crash recovery and Windows path races. Fixture checks do not establish those integrations.
 
 The [verification guide](verification/README.md) explains how to run the retained checks.
 
