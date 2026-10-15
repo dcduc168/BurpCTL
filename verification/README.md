@@ -53,6 +53,24 @@ Load the JAR, confirm the settings panel appears in Burp Settings when searching
 
 Use existing authorized history for read checks. `TrafficFixture populate` is available for a real binary corpus, but it sends 100 POST requests through `127.0.0.1:8080` to its temporary server at `http://127.0.0.1:18123/fixture/0..99`. Run it only after explicit traffic authorization, operator scope setup and interception configuration. It adds project history and does not delete it. Its optional `populate 99` form sends only the last request and requires authorization for that retry.
 
+## Remaining integration gaps
+
+Native fixtures passed on Windows x86_64, Linux x86_64/ARM64 and macOS Intel/Apple Silicon. Live Burp checks used Professional 2026.10 on Windows with bundled Java 26 running Java 21 bytecode. Fixtures do not establish live Linux/macOS Burp UI behavior, Community edition support or a real Burp installation running Java 21.
+
+Other open checks include multiple real Burp windows, live HTTP/2/gzip, twenty actual Burp reloads, abrupt JVM crash recovery and adversarial filesystem path races. Retained extension memory and per-operation Burp peak memory have not been isolated by measurement.
+
+## Windows cross-build from WSL
+
+The previously verified cross-build uses cargo-xwin 0.23.1 and the MSVC target:
+
+```sh
+rustup target add x86_64-pc-windows-msvc
+cargo xwin build --manifest-path cli/Cargo.toml --target x86_64-pc-windows-msvc --release --locked
+python3 scripts/check-release.py --target x86_64-pc-windows-msvc
+```
+
+Windows executable checks require working WSL interop. Published release assets are built natively by GitHub runners; this cross-build is a development option.
+
 ## Resources
 
 The retained process-resource helpers are Windows-specific. Set `JAVA_HOME` to the JDK, then:
