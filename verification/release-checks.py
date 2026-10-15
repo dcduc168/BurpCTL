@@ -9,6 +9,9 @@ import tempfile
 import zipfile
 
 root = Path(__file__).resolve().parents[1]
+wrapper = (root / 'extension/gradle/wrapper/gradle-wrapper.properties').read_text()
+checksum = next(line.split('=', 1)[1] for line in wrapper.splitlines() if line.startswith('distributionSha256Sum='))
+assert len(checksum) == 64 and all(character in '0123456789abcdef' for character in checksum), 'Invalid Gradle distribution SHA-256'
 spec = importlib.util.spec_from_file_location('release', root / 'scripts/package-release.py')
 release = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(release)
