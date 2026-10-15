@@ -16,6 +16,7 @@ uds_windows = "=1.2.1"
 windows-sys = { version = "0.61.2", features = ["Win32_Security_Authorization", "Win32_System_Threading", "Win32_Networking_WinSock"] }
 
 [profile.release]
+opt-level = "z"
 strip = true
 lto = "thin"
 codegen-units = 1

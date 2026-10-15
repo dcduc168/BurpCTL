@@ -296,12 +296,18 @@ fn run(cli: &Cli) -> Result<Value, &'static str> {
     }
     Ok(response)
 }
-fn safe_terminal(value: &str) -> String {
-    let mut result = String::new();
-    for ch in value.chars() {
-        if ch.is_control()
+fn safe_terminal(value: String) -> String {
+    let unsafe_char = |ch: char| {
+        ch.is_control()
             || matches!(ch, '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
-        {
+    };
+    let Some((offset, _)) = value.char_indices().find(|(_, ch)| unsafe_char(*ch)) else {
+        return value;
+    };
+    let mut result = String::with_capacity(value.len());
+    result.push_str(&value[..offset]);
+    for ch in value[offset..].chars() {
+        if unsafe_char(ch) {
             result.push_str(&format!("\\u{:04x}", ch as u32));
         } else {
             result.push(ch);
@@ -315,13 +321,13 @@ fn main() {
         Ok(response) => {
             let ok = response["ok"] == true;
             let display = match cli.format {
-                Format::Json => safe_terminal(&response.to_string()),
+                Format::Json => safe_terminal(response.to_string()),
                 Format::Compact => {
                     let mut result = response.get("result").unwrap_or(&response).clone();
                     if response["meta"].get("provenance").is_some() {
                         result["meta"] = response["meta"].clone();
                     }
-                    safe_terminal(&result.to_string())
+                    safe_terminal(result.to_string())
                 }
             };
             if display.len() + 1 > cli.max_bytes as usize {
@@ -338,7 +344,7 @@ fn main() {
                 let message = response["error"]["message"]
                     .as_str()
                     .unwrap_or("command failed");
-                eprintln!("{}: {}", safe_terminal(code), safe_terminal(message));
+                eprintln!("{}: {}", safe_terminal(code.to_owned()), safe_terminal(message.to_owned()));
                 std::process::exit(code_exit(code));
             }
         }
@@ -366,5 +372,23 @@ fn main() {
             eprintln!("{code}: {message}");
             std::process::exit(code_exit(code));
         }
+    }
+}
+
+#[cfg(test)]
+mod output_checks {
+    use super::safe_terminal;
+
+    #[test]
+    fn terminal_output_reuses_safe_text_and_escapes_controls() {
+        let plain = String::from("{\"path\":\"/café\"}");
+        let original_buffer = plain.as_ptr();
+        let safe = safe_terminal(plain);
+        assert_eq!(safe, "{\"path\":\"/café\"}");
+        assert_eq!(safe.as_ptr(), original_buffer);
+        assert_eq!(
+            safe_terminal("café\u{202e}x\n\u{001b}y\u{2069}".to_owned()),
+            "café\\u202ex\\u000a\\u001by\\u2069"
+        );
     }
 }
