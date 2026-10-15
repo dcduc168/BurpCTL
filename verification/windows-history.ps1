@@ -12,7 +12,8 @@ $acl.SetAccessRuleProtection($true, $false)
 $acl.SetOwner($identity)
 $rule = New-Object Security.AccessControl.FileSystemAccessRule($identity, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow')
 $acl.AddAccessRule($rule)
-[IO.Directory]::CreateDirectory($root, $acl) | Out-Null
+New-Item -ItemType Directory -Path $root | Out-Null
+Set-Acl -LiteralPath $root -AclObject $acl
 try {
     $native = Join-Path $root 'burpctl.exe'
     Copy-Item -LiteralPath $Cli -Destination $native
