@@ -30,6 +30,24 @@ public final class StatusSmoke {
         }
     }
     static void require(boolean value, String message) { if (!value) throw new AssertionError(message); }
+    static void partialFrameDeadline() throws Exception {
+        Path directory = Files.createTempDirectory(Path.of(System.getenv("LOCALAPPDATA")), "bctl-time-");
+        Path socket = directory.resolve("s");
+        try (var listener = java.nio.channels.ServerSocketChannel.open(StandardProtocolFamily.UNIX);
+             var client = SocketChannel.open(StandardProtocolFamily.UNIX)) {
+            listener.bind(UnixDomainSocketAddress.of(socket));
+            client.connect(UnixDomainSocketAddress.of(socket));
+            long started = System.nanoTime();
+            try (var peer = listener.accept(); var frames = new Frames(client, 100)) {
+                peer.write(java.nio.ByteBuffer.wrap(new byte[]{0}));
+                try { frames.read(); throw new AssertionError("Partial frame ignored deadline"); }
+                catch (java.net.SocketTimeoutException expected) {
+                    long elapsed = System.nanoTime() - started;
+                    require(elapsed >= 80_000_000L && elapsed < 2_000_000_000L, "Partial-frame timeout timing");
+                }
+            }
+        } finally { Files.deleteIfExists(socket); Files.delete(directory); }
+    }
     static void malformed(Path socket, byte[] bytes) throws Exception {
         int count = calls.get();
         try (var client = SocketChannel.open(StandardProtocolFamily.UNIX)) {
@@ -48,6 +66,7 @@ public final class StatusSmoke {
         require(calls.get() == count, "Malformed frame invoked Montoya");
     }
     public static void main(String[] args) throws Exception {
+        partialFrameDeadline();
         Path root = Path.of(System.getenv("LOCALAPPDATA"), "burpctl", "r");
         var before = Files.exists(root) ? directories(root) : java.util.Set.<Path>of();
         var server = new Server((MontoyaApi) stub(MontoyaApi.class));
@@ -116,11 +135,13 @@ public final class StatusSmoke {
                 require("STALE_REFERENCE".equals(((Map<?, ?>)response.get("error")).get("code")), "Same project different instance denied");
                 require(calls.get() == count, "Cross-instance request invoked Montoya");
             }
-            for (String json : java.util.List.of("{\"a\":1,\"a\":2}", "{}{}", "{\"a\":1.5}", "{\"a\":9223372036854775808}")) {
+            for (String json : java.util.List.of("{\"a\":1,\"a\":2}", "{}{}", "{\"a\":1.5}", "{\"a\":9223372036854775808}",
+                    "{\"\\ud800\":0}", "{\"\\udc00\":0}", "{\"a\":\"\\ud800\"}", "{\"a\":\"\\udc00\"}")) {
                 try { Json.decode(json); throw new AssertionError("Invalid JSON accepted"); }
                 catch (java.io.IOException expected) {}
             }
-            System.out.println("PASS: malformed framing, overload BUSY, status, auth/context/version/method/params denial before Montoya, strict JSON");
+            require(Json.decode("{\"\\ud83d\\ude00\":\"\\ud83d\\ude00\"}").size() == 1, "Valid Unicode pair accepted");
+            System.out.println("PASS: partial-frame deadline, malformed framing, overload BUSY, status, auth/context/version/method/params denial before Montoya, strict JSON");
         } finally { server.close(); }
         require(owned != null && !Files.exists(owned), "Owned files removed on close");
         long deadline = System.nanoTime() + 2_000_000_000L;

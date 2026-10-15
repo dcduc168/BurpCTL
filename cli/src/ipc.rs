@@ -352,6 +352,43 @@ mod tests {
     }
 
     #[test]
+    fn completed_export_with_wrong_hash_is_rejected_and_cleaned() {
+        let directory = tempfile::tempdir().unwrap();
+        let socket = directory.path().join("s");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut peer, _) = listener.accept().unwrap();
+            read_frame(&mut peer, Instant::now() + Duration::from_secs(5)).unwrap();
+            let opening = serde_json::json!({"version":{"major":1,"minor":0},"id":"hash","ok":true,
+                "stream":{"kind":"raw_bytes","size_bytes":3,"chunk_max":65536},"meta":{}});
+            let ending = serde_json::json!({"version":{"major":1,"minor":0},"id":"hash",
+                "stream_end":{"complete":true,"bytes_sent":3,"sha256":"0".repeat(64)}});
+            for (tag, payload) in [
+                (1, serde_json::to_vec(&opening).unwrap()),
+                (2, b"abc".to_vec()),
+                (1, serde_json::to_vec(&ending).unwrap()),
+            ] {
+                peer.write_all(&((payload.len() + 1) as u32).to_be_bytes())
+                    .unwrap();
+                peer.write_all(&[tag]).unwrap();
+                peer.write_all(&payload).unwrap();
+            }
+        });
+        let output_directory = directory.path().join("exports");
+        std::fs::create_dir(&output_directory).unwrap();
+        let options = ExportOptions {
+            output: output_directory.join("evidence.bin"),
+            force: false,
+        };
+        let error =
+            request(&socket, &serde_json::json!({"id":"hash"}), Some(&options)).unwrap_err();
+        server.join().unwrap();
+        assert!(is_partial(&error));
+        assert!(!options.output.exists());
+        assert_eq!(std::fs::read_dir(output_directory).unwrap().count(), 0);
+    }
+
+    #[test]
     fn response_variants_cannot_report_an_export_without_a_stream() {
         let normal = serde_json::json!({"version":{"major":1,"minor":0},"id":"audit","ok":true,
             "result":{},"meta":{"complete":true,"truncated":false}});

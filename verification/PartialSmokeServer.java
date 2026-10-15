@@ -12,7 +12,10 @@ public final class PartialSmokeServer {
         var bytes = HistorySmoke.proxy(ByteArray.class, (method, values) -> switch (method) {
             case "length" -> 131072;
             case "getByte" -> {
-                if ((Integer)values[0] >= 65536) throw new IllegalStateException("Injected transfer failure");
+                if ((Integer)values[0] >= 65536) {
+                    System.out.println("first chunk sent");
+                    throw new IllegalStateException("Injected transfer failure");
+                }
                 yield (byte)7;
             }
             default -> throw new AssertionError(method);

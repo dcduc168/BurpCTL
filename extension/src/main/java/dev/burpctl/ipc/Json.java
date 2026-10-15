@@ -51,7 +51,7 @@ public final class Json {
                 var result = new LinkedHashMap<String, Object>();
                 reader.beginObject();
                 while (reader.hasNext()) {
-                    String key = reader.nextName();
+                    String key = unicode(reader.nextName());
                     if (result.containsKey(key) || result.size() >= 1024) throw new IOException("Invalid keys");
                     result.put(key, read(reader, depth + 1));
                 }
@@ -66,20 +66,20 @@ public final class Json {
                 }
                 reader.endArray(); yield result;
             }
-            case STRING -> {
-                String value = reader.nextString();
-                for (int i = 0; i < value.length(); i++) {
-                    char unit = value.charAt(i);
-                    if (Character.isHighSurrogate(unit)) {
-                        if (++i >= value.length() || !Character.isLowSurrogate(value.charAt(i))) throw new IOException("Invalid Unicode");
-                    } else if (Character.isLowSurrogate(unit)) throw new IOException("Invalid Unicode");
-                }
-                yield value;
-            }
+            case STRING -> unicode(reader.nextString());
             case NUMBER -> Long.parseLong(reader.nextString());
             case BOOLEAN -> reader.nextBoolean();
             case NULL -> { reader.nextNull(); yield null; }
             default -> throw new IOException("Invalid JSON token");
         };
+    }
+    private static String unicode(String value) throws IOException {
+        for (int i = 0; i < value.length(); i++) {
+            char unit = value.charAt(i);
+            if (Character.isHighSurrogate(unit)) {
+                if (++i >= value.length() || !Character.isLowSurrogate(value.charAt(i))) throw new IOException("Invalid Unicode");
+            } else if (Character.isLowSurrogate(unit)) throw new IOException("Invalid Unicode");
+        }
+        return value;
     }
 }
