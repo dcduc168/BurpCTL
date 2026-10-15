@@ -114,14 +114,49 @@ fn eof(client: &mut UnixStream, deadline: Instant) -> io::Result<()> {
         }
     }
 }
-#[cfg(not(windows))]
+#[cfg(unix)]
 fn eof(client: &mut UnixStream, deadline: Instant) -> io::Result<()> {
+    client.set_nonblocking(true)?;
     let mut trailing = [0];
-    client.set_read_timeout(Some(remaining(deadline)?))?;
-    if client.read(&mut trailing)? != 0 {
-        return Err(invalid());
+    loop {
+        remaining(deadline)?;
+        match client.read(&mut trailing) {
+            Ok(0) => return Ok(()),
+            Ok(_) => return Err(invalid()),
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                wait_ready(client, libc::POLLIN, deadline)?;
+            }
+            Err(error) => return Err(error),
+        }
     }
-    Ok(())
+}
+#[cfg(unix)]
+fn wait_ready(client: &UnixStream, events: libc::c_short, deadline: Instant) -> io::Result<()> {
+    use std::os::fd::AsRawFd;
+    let mut descriptor = libc::pollfd {
+        fd: client.as_raw_fd(),
+        events,
+        revents: 0,
+    };
+    loop {
+        let timeout = remaining(deadline)?.as_millis().clamp(1, i32::MAX as u128) as i32;
+        // The descriptor remains owned by client; poll accesses one initialized stack entry.
+        let ready = unsafe { libc::poll(&mut descriptor, 1, timeout) };
+        if ready > 0 {
+            return if descriptor.revents & libc::POLLNVAL != 0 {
+                Err(invalid())
+            } else {
+                Ok(())
+            };
+        }
+        if ready < 0 {
+            let error = io::Error::last_os_error();
+            if error.kind() != io::ErrorKind::Interrupted {
+                return Err(error);
+            }
+        }
+    }
 }
 fn remaining(deadline: Instant) -> io::Result<Duration> {
     deadline
@@ -130,7 +165,12 @@ fn remaining(deadline: Instant) -> io::Result<Duration> {
         .ok_or_else(|| io::Error::new(io::ErrorKind::TimedOut, "IPC deadline exceeded"))
 }
 fn read_until(client: &mut UnixStream, mut bytes: &mut [u8], deadline: Instant) -> io::Result<()> {
+    #[cfg(unix)]
+    client.set_nonblocking(true)?;
     while !bytes.is_empty() {
+        #[cfg(unix)]
+        remaining(deadline)?;
+        #[cfg(windows)]
         client.set_read_timeout(Some(remaining(deadline)?))?;
         match client.read(bytes) {
             Ok(0) => {
@@ -141,18 +181,31 @@ fn read_until(client: &mut UnixStream, mut bytes: &mut [u8], deadline: Instant) 
             }
             Ok(length) => bytes = &mut bytes[length..],
             Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            #[cfg(unix)]
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                wait_ready(client, libc::POLLIN, deadline)?;
+            }
             Err(error) => return Err(error),
         }
     }
     Ok(())
 }
 fn write_until(client: &mut UnixStream, mut bytes: &[u8], deadline: Instant) -> io::Result<()> {
+    #[cfg(unix)]
+    client.set_nonblocking(true)?;
     while !bytes.is_empty() {
+        #[cfg(unix)]
+        remaining(deadline)?;
+        #[cfg(windows)]
         client.set_write_timeout(Some(remaining(deadline)?))?;
         match client.write(bytes) {
             Ok(0) => return Err(io::Error::new(io::ErrorKind::WriteZero, "Incomplete frame")),
             Ok(length) => bytes = &bytes[length..],
             Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            #[cfg(unix)]
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                wait_ready(client, libc::POLLOUT, deadline)?;
+            }
             Err(error) => return Err(error),
         }
     }
@@ -177,8 +230,11 @@ pub fn request_timeout(
         return Err(invalid());
     }
     let mut client = UnixStream::connect(socket)?;
-    client.set_read_timeout(Some(Duration::from_secs(30)))?;
-    client.set_write_timeout(Some(Duration::from_secs(30)))?;
+    #[cfg(windows)]
+    {
+        client.set_read_timeout(Some(Duration::from_secs(30)))?;
+        client.set_write_timeout(Some(Duration::from_secs(30)))?;
+    }
     write_until(
         &mut client,
         &((payload.len() + 1) as u32).to_be_bytes(),
