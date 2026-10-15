@@ -18,6 +18,8 @@ public final class HistorySmoke {
     static final AtomicInteger reads = new AtomicInteger();
     static final AtomicInteger responses = new AtomicInteger();
     static final AtomicInteger backend = new AtomicInteger();
+    static final AtomicInteger requests = new AtomicInteger();
+    static final AtomicInteger scopeChecks = new AtomicInteger();
     interface Call { Object invoke(String name, Object[] arguments); }
     static <T> T proxy(Class<T> type, Call handler) {
         return type.cast(Proxy.newProxyInstance(type.getClassLoader(), new Class<?>[]{type},
@@ -53,7 +55,7 @@ public final class HistorySmoke {
         });
         return proxy(ProxyHttpRequestResponse.class, (name, args) -> switch (name) {
             case "id" -> id;
-            case "finalRequest" -> request;
+            case "finalRequest" -> { requests.incrementAndGet(); yield request; }
             case "hasResponse" -> id != 98;
             case "response" -> { responses.incrementAndGet(); yield response; }
             default -> throw new AssertionError("Deprecated/unexpected history access: " + name);
@@ -64,7 +66,9 @@ public final class HistorySmoke {
         var rows = java.util.stream.IntStream.range(0, 100).mapToObj(HistorySmoke::row).toList();
         var scoped = new java.util.concurrent.atomic.AtomicBoolean(true);
         var api = proxy(MontoyaApi.class, (name, arguments) -> switch (name) {
-            case "scope" -> proxy(burp.api.montoya.scope.Scope.class, (method, values) -> scoped.get());
+            case "scope" -> proxy(burp.api.montoya.scope.Scope.class, (method, values) -> {
+                scopeChecks.incrementAndGet(); return scoped.get();
+            });
             case "proxy" -> { backend.incrementAndGet(); yield proxy(burp.api.montoya.proxy.Proxy.class, (method, values) -> {
                 require(method.equals("history") && values.length == 1, "Filtered API only");
                 var filter = (ProxyHistoryFilter)values[0];
@@ -81,14 +85,32 @@ public final class HistorySmoke {
         require(items.size() == 10 && bodies.get() == 0 && reads.get() == 0, "Bounded metadata without body access");
         require(items.stream().allMatch(item -> ((Map<?, ?>)item).keySet().equals(java.util.Set.of("id", "status"))), "Exact projection");
         responses.set(0);
+        requests.set(0);
         history.query(Map.of("fields", List.of("id"), "limit", 100L), false);
         require(responses.get() == 0, "Unselected status not accessed");
+        require(requests.get() == 200, "ID-only projection adds no request access beyond scope checks");
+        requests.set(0);
+        history.query(Map.of("fields", List.of("method", "host", "path", "port", "secure"), "limit", 100L), false);
+        require(requests.get() == 300 && bodies.get() == 0, "Request metadata resolved once per projected row without body access");
         result = history.query(Map.of("fields", List.of("id", "status"), "limit", 100L), false);
         require(Json.decode(Json.encode(result.result())).toString().contains("status=null"), "No response is null");
+        scopeChecks.set(0);
         require(((List<?>)((Map<?, ?>)history.query(Map.of("filters", Map.of("host", "other")), false).result()).get("items")).isEmpty(), "Empty success");
+        require(scopeChecks.get() == 0 && bodies.get() == 0, "Nonmatching hosts skip URL scope work and bodies");
+        for (var filter : List.of(Map.of("method", "GET"), Map.of("path_contains", "/missing/"), Map.of("status", 404L))) {
+            scopeChecks.set(0);
+            result = history.query(Map.of("filters", filter), false);
+            require(((List<?>)((Map<?, ?>)result.result()).get("items")).isEmpty(), "Nonmatching filter returns empty success");
+            require(scopeChecks.get() == 0 && bodies.get() == 0, "Nonmatching metadata skips URL scope work and bodies");
+        }
+        scopeChecks.set(0);
+        requests.set(0);
+        history.query(Map.of("id", 0L, "fields", List.of("id")), true);
+        require(scopeChecks.get() == 2 && requests.get() == 2, "Get checks scope in callback and before projection");
         try { history.query(Map.of("id", 0L, "part", "response.body"), true); throw new AssertionError("Raw permission"); }
         catch (Fault error) { require(error.code.equals("PERMISSION_DENIED"), "Raw separately denied"); }
         scoped.set(false);
+        require(((List<?>)((Map<?, ?>)history.query(Map.of("filters", Map.of("host", "127.0.0.1")), false).result()).get("items")).isEmpty(), "Matching host still requires scope");
         try { history.query(Map.of("id", 0L), true); throw new AssertionError("Scope bypass"); }
         catch (Fault error) { require(error.code.equals("OUT_OF_SCOPE"), "Out-of-scope ID denied"); }
         scoped.set(true);

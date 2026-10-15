@@ -62,12 +62,11 @@ public final class History {
     }
     private boolean matches(ProxyHttpRequestResponse row, Map<String, Object> filters) {
         var request = row.finalRequest();
-        if (!api.scope().isInScope(request.url())) return false;
         if (filters.containsKey("host") && !request.httpService().host().equalsIgnoreCase((String)filters.get("host"))) return false;
         if (filters.containsKey("method") && !request.method().equals(filters.get("method"))) return false;
         if (filters.containsKey("path_contains") && !request.pathWithoutQuery().contains((String)filters.get("path_contains"))) return false;
         if (filters.containsKey("status") && (!row.hasResponse() || row.response().statusCode() != (Long)filters.get("status"))) return false;
-        return true;
+        return api.scope().isInScope(request.url());
     }
     public Query query(Map<String, Object> params, boolean get) {
         policy.requireMetadata();
@@ -87,7 +86,7 @@ public final class History {
                 if (!policy.metadata.get() || accepted.get() >= limit) return false;
                 if (get && row.id() != (Long)params.get("id")) return false;
                 if (get && !inScope(row)) { denied.set(true); return false; }
-                try { if (!matches(row, filters)) return false; }
+                try { if (!get && !matches(row, filters)) return false; }
                 catch (burp.api.montoya.http.message.requests.MalformedRequestException e) { return false; }
                 int count;
                 do {
@@ -120,9 +119,10 @@ public final class History {
                         "original_size_bytes", bytes.length(), "returned_bytes", returned, "encoding", encoding));
             }
             var items = new ArrayList<Map<String, Object>>(rows.size());
+            var selectedFields = fields(params);
             for (var row : rows) {
                 if (!inScope(row)) throw new Fault("OUT_OF_SCOPE");
-                items.add(project(row, fields(params)));
+                items.add(projectMetadata(row, selectedFields));
             }
             if (get && items.isEmpty()) throw new Fault("NOT_FOUND");
             var result = get ? Map.of("item", items.get(0)) : Map.of("items", items);
@@ -140,18 +140,20 @@ public final class History {
         }
         @Override public void close() { scan.release(); }
     }
-    private static Map<String, Object> project(ProxyHttpRequestResponse row, List<String> fields) {
+    private static Map<String, Object> projectMetadata(ProxyHttpRequestResponse row, List<String> fields) {
         var result = new LinkedHashMap<String, Object>();
         // Resolve request metadata only when a selected field needs it.
+        var request = fields.contains("method") || fields.contains("host") || fields.contains("path")
+                || fields.contains("port") || fields.contains("secure") ? row.finalRequest() : null;
         for (String field : fields) result.put(field, switch (field) {
             case "id" -> row.id();
-            case "method" -> row.finalRequest().method();
-            case "host" -> row.finalRequest().httpService().host();
-            case "path" -> row.finalRequest().pathWithoutQuery();
+            case "method" -> request.method();
+            case "host" -> request.httpService().host();
+            case "path" -> request.pathWithoutQuery();
             case "status" -> row.hasResponse() ? row.response().statusCode() : null;
             case "has_response" -> row.hasResponse();
-            case "port" -> row.finalRequest().httpService().port();
-            case "secure" -> row.finalRequest().httpService().secure();
+            case "port" -> request.httpService().port();
+            case "secure" -> request.httpService().secure();
             default -> throw new Fault("INVALID_ARGUMENT");
         });
         for (Object value : result.values()) if (value instanceof String text && text.length() > 8192) throw new Fault("OUTPUT_LIMIT");
