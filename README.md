@@ -84,6 +84,8 @@ Authentication, permissions and history scope checks run inside the extension. R
 
 See the [protocol reference](protocol/SPEC.md) for fields, size budgets, runtime paths and error codes. The [Agent Skill](skills/burpctl/SKILL.md) covers instance selection and evidence retrieval for local coding agents.
 
+To install the skill, copy the entire `skills/burpctl/` directory, including `references/`, into your agent's skill directory.
+
 ## Verification
 
 [Release CI](.github/workflows/release.yml) builds and checks all five native targets, including authenticated Rust/Java IPC, permissions, byte integrity and unload cleanup. Fixtures use synthetic data and do not establish live Burp or UI compatibility.
