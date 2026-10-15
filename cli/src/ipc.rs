@@ -382,26 +382,38 @@ mod tests {
             let directory = tempfile::tempdir().unwrap();
             let socket = directory.path().join("s");
             let listener = UnixListener::bind(&socket).unwrap();
+            let (ready, prepared) = std::sync::mpsc::channel();
+            let (release, finished) = std::sync::mpsc::channel();
             let server = std::thread::spawn(move || {
                 let (mut peer, _) = listener.accept().unwrap();
-                std::thread::sleep(Duration::from_millis(30));
+                if scenario == 0 {
+                    drop(peer);
+                    ready.send(()).unwrap();
+                    return;
+                }
                 if scenario == 1 {
                     peer.write_all(&[1]).unwrap();
                 }
-                if scenario == 2 {
-                    std::thread::sleep(Duration::from_millis(150));
-                }
+                ready.send(()).unwrap();
+                finished.recv_timeout(Duration::from_secs(5)).unwrap();
             });
             let mut client = UnixStream::connect(&socket).unwrap();
+            prepared.recv_timeout(Duration::from_secs(5)).unwrap();
             let started = Instant::now();
             let result = eof(&mut client, started + Duration::from_millis(100));
+            if scenario != 0 {
+                release.send(()).unwrap();
+            }
             match scenario {
                 0 => assert!(result.is_ok(), "EOF failed: {result:?}"),
                 1 => assert_eq!(result.unwrap_err().kind(), io::ErrorKind::InvalidData),
-                2 => assert!(matches!(
-                    result.unwrap_err().kind(),
-                    io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
-                )),
+                2 => {
+                    assert!(matches!(
+                        result.unwrap_err().kind(),
+                        io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
+                    ));
+                    assert!(started.elapsed() >= Duration::from_millis(80));
+                }
                 _ => unreachable!(),
             }
             assert!(started.elapsed() < Duration::from_secs(1));
