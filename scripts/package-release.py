@@ -23,6 +23,8 @@ def package_release(output: Path) -> str:
         if major != 65:
             raise ValueError('Extension entrypoint must target Java 21 bytecode')
         manifest = dict(line.split(': ', 1) for line in jar.read('META-INF/MANIFEST.MF').decode().splitlines() if ': ' in line)
+        if manifest.get('Implementation-Title') != 'BurpCTL':
+            raise ValueError('Extension artifact title must be BurpCTL')
         if manifest.get('Implementation-Version') != version:
             raise ValueError('Extension artifact version does not match the release')
     cli_bytes = cli.read_bytes()

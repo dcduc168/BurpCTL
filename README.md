@@ -98,6 +98,14 @@ python3 scripts/package-release.py --output BurpCTL-0.1.0.zip
 
 Packaging checks artifact versions and Java 21 bytecode, excludes bundled Montoya classes, writes SHA-256 checksums and removes its archive if writing fails. It never replaces an existing output.
 
+## GitHub release builds
+
+The [release workflow](.github/workflows/release.yml) builds on Windows Server 2025 with Rust 1.98.1, Temurin 21.0.12 and the pinned Gradle wrapper. It checks the CLI, Java fixtures, native raw/Base64 transfers, interrupted exports and release packaging. Live Burp and Repeater UI verification remain manual.
+
+Push a tag matching the product version, such as `v0.1.0`, to build `BurpCTL-0.1.0-windows-x86_64.zip` and its SHA-256 file. The workflow creates a draft GitHub release after the checks pass; versions with a prerelease suffix are marked as prereleases. Review and publish the draft separately. Existing releases are never overwritten; a failed run that already created a draft needs that draft removed before retrying.
+
+For a build without creating a release, select **Release build → Run workflow** in GitHub Actions. Both files are retained as workflow artifacts for 14 days. The workflow must first exist on the default branch to enable this control.
+
 ## Verification
 
 Checks cover authenticated Rust/Java UDS, permissions, scope, field selection, instance ambiguity and incomplete exports. Production-server fixtures passed 200 raw byte/hash comparisons and 100 Base64-prefix comparisons on Windows Temurin 21.0.12. Cargo fmt/check/clippy, four focused Rust checks on Linux and native Windows, Gradle build and release packaging checks passed.

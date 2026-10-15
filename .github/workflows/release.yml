@@ -1,0 +1,177 @@
+name: Release build
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Windows x86_64 and Java 21
+    runs-on: windows-2025
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      RUSTUP_TOOLCHAIN: '1.98.1'
+      CARGO_TERM_COLOR: always
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      archive: ${{ steps.version.outputs.archive }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.14'
+
+      - name: Validate release version
+        id: version
+        shell: python
+        run: |
+          import os, pathlib, re, tomllib
+          version = tomllib.loads(pathlib.Path('cli/Cargo.toml').read_text())['package']['version']
+          if not re.fullmatch(r'[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?', version):
+              raise SystemExit('Invalid release version')
+          if os.environ['GITHUB_REF_TYPE'] == 'tag' and os.environ['GITHUB_REF_NAME'] != f'v{version}':
+              raise SystemExit('Tag must match v followed by the product version')
+          if f'version = "{version}"' not in pathlib.Path('extension/build.gradle.kts').read_text():
+              raise SystemExit('CLI and extension versions must match')
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
+              output.write(f'version={version}\narchive=BurpCTL-{version}-windows-x86_64.zip\n')
+              output.write(f'prerelease={str("-" in version.split("+", 1)[0]).lower()}\n')
+
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: '21.0.12+8'
+          verify-signature: true
+
+      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        with:
+          cache-disabled: true
+
+      - name: Install Rust toolchain
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          rustup toolchain install $env:RUSTUP_TOOLCHAIN --profile minimal --component rustfmt --component clippy --target x86_64-pc-windows-msvc
+
+      - name: Check and build CLI
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          cargo fmt --manifest-path cli/Cargo.toml -- --check
+          cargo check --manifest-path cli/Cargo.toml --target x86_64-pc-windows-msvc --locked
+          cargo clippy --manifest-path cli/Cargo.toml --target x86_64-pc-windows-msvc --locked --all-targets -- -D warnings
+          cargo test --manifest-path cli/Cargo.toml --target x86_64-pc-windows-msvc --release --locked
+          cargo build --manifest-path cli/Cargo.toml --target x86_64-pc-windows-msvc --release --locked
+
+      - name: Build extension
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          .\extension\gradlew.bat -p extension build --no-daemon
+
+      - name: Check Java and native IPC fixtures
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          $gradleHome = if ($env:GRADLE_USER_HOME) { $env:GRADLE_USER_HOME } else { Join-Path $env:USERPROFILE '.gradle' }
+          $montoya = @(Get-ChildItem -LiteralPath (Join-Path $gradleHome 'caches\modules-2\files-2.1\net.portswigger.burp.extensions\montoya-api\2026.7') -Recurse -Filter 'montoya-api-2026.7.jar')
+          if ($montoya.Count -ne 1) { throw 'Expected the locked Montoya API JAR' }
+          $classes = Join-Path $env:RUNNER_TEMP 'burpctl-checks'
+          New-Item -ItemType Directory -Path $classes -Force | Out-Null
+          $classpath = "$classes;extension\build\libs\burpctl-extension.jar;$($montoya[0].FullName)"
+          javac --release 21 -cp $classpath -d $classes verification\StatusSmoke.java verification\TrafficFixture.java verification\HistorySmoke.java verification\HistoryServer.java verification\PartialSmokeServer.java verification\SettingsSmoke.java verification\LifecycleSmoke.java
+          foreach ($check in @('StatusSmoke', 'HistorySmoke', 'SettingsSmoke', 'LifecycleSmoke')) {
+            java -cp $classpath $check
+          }
+          $fixture = New-Object Diagnostics.Process
+          $fixture.StartInfo.FileName = Join-Path $env:JAVA_HOME 'bin\java.exe'
+          $fixture.StartInfo.Arguments = '-cp "' + $classpath + '" HistoryServer'
+          $fixture.StartInfo.UseShellExecute = $false
+          $fixture.StartInfo.RedirectStandardInput = $true
+          $fixture.StartInfo.RedirectStandardOutput = $true
+          if (!$fixture.Start()) { throw 'Cannot start history fixture' }
+          try {
+            $ready = $fixture.StandardOutput.ReadLineAsync()
+            if (!$ready.Wait(10000) -or $ready.Result -ne 'ready') { throw 'History fixture startup failed' }
+            $cli = 'cli\target\x86_64-pc-windows-msvc\release\burpctl.exe'
+            $instances = (& $cli instance list --format json | ConvertFrom-Json).result.items
+            $selectedFixture = @($instances | Where-Object { $_.project_id -eq 'fixture-project' })
+            if ($selectedFixture.Count -ne 1) { throw 'Expected one history fixture instance' }
+            .\verification\windows-history.ps1 -Java $fixture.StartInfo.FileName -Classes $classpath -Cli $cli -Instance $selectedFixture[0].instance_id
+          } finally {
+            if (!$fixture.HasExited) {
+              $fixture.StandardInput.WriteLine('stop')
+              if (!$fixture.WaitForExit(5000)) { $fixture.Kill(); $fixture.WaitForExit() }
+            }
+            $fixture.Dispose()
+          }
+          # This fixture checks expected nonzero CLI exit codes itself.
+          $PSNativeCommandUseErrorActionPreference = $false
+          .\verification\windows-partial.ps1 -Java (Join-Path $env:JAVA_HOME 'bin\java.exe') -Classpath $classpath -Cli 'cli\target\x86_64-pc-windows-msvc\release\burpctl.exe'
+
+      - name: Check and package release
+        shell: python
+        env:
+          ARCHIVE: ${{ steps.version.outputs.archive }}
+        run: |
+          import hashlib, os, pathlib, subprocess, sys
+          subprocess.run([sys.executable, 'verification/release-checks.py'], check=True)
+          archive = pathlib.Path(os.environ['RUNNER_TEMP']) / os.environ['ARCHIVE']
+          subprocess.run([sys.executable, 'scripts/package-release.py', '--output', str(archive)], check=True)
+          with archive.open('rb') as source:
+              digest = hashlib.file_digest(source, 'sha256').hexdigest()
+          archive.with_suffix('.zip.sha256').write_text(f'{digest}  {archive.name}\n', encoding='utf-8')
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: burpctl-windows-x86_64
+          path: |
+            ${{ runner.temp }}/${{ steps.version.outputs.archive }}
+            ${{ runner.temp }}/${{ steps.version.outputs.archive }}.sha256
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+  draft-release:
+    name: Create draft release
+    needs: build
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: burpctl-windows-x86_64
+          path: release
+          digest-mismatch: error
+
+      - name: Create draft with verified assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.build.outputs.version }}
+          ARCHIVE: ${{ needs.build.outputs.archive }}
+          PRERELEASE: ${{ needs.build.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          (cd release && sha256sum --check "$ARCHIVE.sha256")
+          flags=()
+          if [[ "$PRERELEASE" == true ]]; then flags+=(--prerelease); fi
+          gh release create "$RELEASE_TAG" "release/$ARCHIVE" "release/$ARCHIVE.sha256" \
+            --repo "$GH_REPO" --verify-tag --draft --title "BurpCTL $VERSION" \
+            --generate-notes "${flags[@]}"
