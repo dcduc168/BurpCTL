@@ -86,6 +86,10 @@ public final class StatusSmoke {
             envelope.put("auth", token); envelope.put("method", "status"); envelope.put("params", Map.of());
             envelope.put("context", Map.of("instance_id", metadata.get("instance_id"), "project_id", "fixture-project"));
             require(Boolean.TRUE.equals(request(socket, envelope).get("ok")), "Authenticated status");
+            var screenshot = new java.util.LinkedHashMap<>(envelope); screenshot.put("method", "repeater.screenshot");
+            int beforeScreenshot = calls.get();
+            require("PERMISSION_DENIED".equals(((Map<?, ?>)request(socket, screenshot).get("error")).get("code")), "Screenshot default denied");
+            require(calls.get() == beforeScreenshot, "Denied screenshot invoked Montoya");
             require(Server.EXTENSION_VERSION.equals(Server.class.getPackage().getImplementationVersion()), "Version comes from packaged build metadata");
             require(Server.EXTENSION_VERSION.equals(((Map<?, ?>)request(socket, envelope).get("result")).get("extension_version")), "Status reports packaged version");
             for (String input : java.util.List.of("{\"id\":1,\"part\":null}", "{\"id\":1,\"part\":\"response.body\",\"encoding\":null}")) {

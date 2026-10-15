@@ -10,7 +10,7 @@ use std::path::PathBuf;
 #[derive(Parser)]
 #[command(
     version,
-    about = "Lightweight authenticated local interface to Burp Suite"
+    about = env!("CARGO_PKG_DESCRIPTION")
 )]
 struct Cli {
     /// Full live instance ID from instance list.
@@ -38,6 +38,11 @@ enum Command {
     History {
         #[command(subcommand)]
         command: HistoryCommand,
+    },
+    /// Capture the Repeater pane without switching tools or sending traffic.
+    Repeater {
+        #[command(subcommand)]
+        command: RepeaterCommand,
     },
     /// Check Burp scope membership without sending traffic.
     Scope {
@@ -125,6 +130,17 @@ impl Part {
 #[derive(Subcommand)]
 enum ScopeCommand {
     Check { url: String },
+}
+#[derive(Subcommand)]
+enum RepeaterCommand {
+    /// Save the current main-window Repeater view as a verified PNG.
+    Screenshot {
+        #[arg(long)]
+        output: PathBuf,
+        /// Allow replacement of an existing explicit destination.
+        #[arg(long)]
+        force: bool,
+    },
 }
 #[derive(Subcommand)]
 enum InstanceCommand {
@@ -256,17 +272,26 @@ fn run(cli: &Cli) -> Result<Value, &'static str> {
         Command::Scope {
             command: ScopeCommand::Check { url },
         } => ("scope.check", json!({"url":url,"max_bytes":cli.max_bytes})),
+        Command::Repeater {
+            command: RepeaterCommand::Screenshot { .. },
+        } => ("repeater.screenshot", json!({"max_bytes":cli.max_bytes})),
         _ => ("status", json!({"max_bytes":cli.max_bytes})),
     };
-    let export = if let Command::History {
-        command:
-            HistoryCommand::Get {
-                output: Some(output),
-                force,
-                ..
-            },
-    } = &cli.command
-    {
+    let destination = match &cli.command {
+        Command::History {
+            command:
+                HistoryCommand::Get {
+                    output: Some(output),
+                    force,
+                    ..
+                },
+        } => Some((output, force)),
+        Command::Repeater {
+            command: RepeaterCommand::Screenshot { output, force },
+        } => Some((output, force)),
+        _ => None,
+    };
+    let export = if let Some((output, force)) = destination {
         if !*force && output.try_exists().map_err(|_| "IPC_ERROR")? {
             return Err("INVALID_ARGUMENT");
         }
@@ -344,7 +369,11 @@ fn main() {
                 let message = response["error"]["message"]
                     .as_str()
                     .unwrap_or("command failed");
-                eprintln!("{}: {}", safe_terminal(code.to_owned()), safe_terminal(message.to_owned()));
+                eprintln!(
+                    "{}: {}",
+                    safe_terminal(code.to_owned()),
+                    safe_terminal(message.to_owned())
+                );
                 std::process::exit(code_exit(code));
             }
         }

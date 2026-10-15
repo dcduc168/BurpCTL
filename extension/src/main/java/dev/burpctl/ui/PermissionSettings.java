@@ -17,12 +17,13 @@ public final class PermissionSettings implements SettingsPanel, AutoCloseable {
     private JPanel panel;
     private JCheckBox metadata;
     private JCheckBox raw;
+    private JCheckBox screenshot;
     private JLabel state;
     private boolean closed;
 
     public PermissionSettings(UserInterface ui, Policy policy) { this.ui = ui; this.policy = policy; }
 
-    @Override public Set<String> keywords() { return Set.of("BurpCTL", "CLI", "history", "permissions", "metadata", "raw", "body"); }
+    @Override public Set<String> keywords() { return Set.of("BurpCTL", "CLI", "history", "permissions", "metadata", "raw", "body", "Repeater", "screenshot"); }
 
     @Override public JComponent uiComponent() {
         if (SwingUtilities.isEventDispatchThread()) return component();
@@ -41,7 +42,7 @@ public final class PermissionSettings implements SettingsPanel, AutoCloseable {
         var title = new JLabel("CLI permissions");
         content.add(title);
         content.add(Box.createVerticalStrut(8));
-        content.add(text("Choose which in-scope history data local CLI tools may read."));
+        content.add(text("Choose which history data and Repeater views local CLI tools may read."));
         content.add(Box.createVerticalStrut(20));
         metadata = new JCheckBox("Allow history metadata");
         metadata.setMnemonic('M');
@@ -56,6 +57,12 @@ public final class PermissionSettings implements SettingsPanel, AutoCloseable {
         content.add(raw);
         var rawHint = text("Full HTTP messages, headers and body bytes. Requires metadata access.");
         content.add(rawHint);
+        content.add(Box.createVerticalStrut(16));
+        screenshot = new JCheckBox("Allow Repeater screenshots");
+        screenshot.setMnemonic('S');
+        screenshot.getAccessibleContext().setAccessibleDescription("Allow PNG captures of the Repeater pane, even while another main tool is selected, including sensitive data outside target scope.");
+        content.add(screenshot);
+        content.add(text("Repeater content, even while another tool is selected. May include headers, bodies and data outside scope. Independent of history permissions."));
         content.add(Box.createVerticalStrut(20));
         state = new JLabel();
         content.add(state);
@@ -65,6 +72,7 @@ public final class PermissionSettings implements SettingsPanel, AutoCloseable {
         content.add(text("Status and scope checks remain available. Scope membership is not engagement authorization."));
         metadata.addActionListener(event -> update());
         raw.addActionListener(event -> update());
+        screenshot.addActionListener(event -> update());
         var row = new GridBagConstraints();
         row.gridx = 0; row.gridy = GridBagConstraints.RELATIVE;
         row.weightx = 1; row.fill = GridBagConstraints.HORIZONTAL; row.anchor = GridBagConstraints.WEST;
@@ -104,6 +112,7 @@ public final class PermissionSettings implements SettingsPanel, AutoCloseable {
         if (!metadata.isSelected()) { raw.setSelected(false); policy.raw.set(false); }
         policy.metadata.set(metadata.isSelected());
         policy.raw.set(raw.isSelected());
+        policy.screenshot.set(screenshot.isSelected());
         refresh();
     }
 
@@ -113,13 +122,15 @@ public final class PermissionSettings implements SettingsPanel, AutoCloseable {
         raw.setSelected(!closed && policy.metadata.get() && policy.raw.get());
         metadata.setEnabled(!closed);
         raw.setEnabled(!closed && metadata.isSelected());
+        screenshot.setSelected(!closed && policy.screenshot.get());
+        screenshot.setEnabled(!closed);
         state.setText(closed ? "Extension unloaded"
-                : !metadata.isSelected() ? "History reads disabled"
+                : !metadata.isSelected() ? screenshot.isSelected() ? "Repeater screenshots enabled" : "Reads disabled"
                 : raw.isSelected() ? "Metadata and raw reads enabled" : "Metadata reads enabled");
     }
 
     @Override public synchronized void close() {
-        closed = true; policy.metadata.set(false); policy.raw.set(false);
+        closed = true; policy.metadata.set(false); policy.raw.set(false); policy.screenshot.set(false);
         if (panel != null) SwingUtilities.invokeLater(this::refresh);
     }
 }

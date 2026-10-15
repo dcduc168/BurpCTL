@@ -2,7 +2,7 @@
 
 Read Burp Suite status, scope and proxy history from a native Windows CLI. BurpCTL queries Montoya on demand and returns selected fields or exact message bytes. It keeps no history cache or index.
 
-Version 0.1.0 implements `status`, `instance list`, `history list`, `history get` and `scope check`. It has been exercised with Burp Suite Professional 2026.10. Full v1 acceptance remains open; see [verification](#verification).
+BurpCTL `0.1.0` is the first release. It supports `status`, `instance list`, `history list`, `history get`, `scope check` and `repeater screenshot`, and has been exercised with Burp Suite Professional 2026.10. Remaining acceptance checks are listed under [verification](#verification).
 
 ## Get started
 
@@ -42,6 +42,18 @@ UTF-8 previews reject invalid sequences, including a prefix cut within a charact
 
 Exact bytes refer to Montoya's message representation. They do not preserve HTTP/2 network framing. Raw retrieval does not decompress bodies or normalize line endings.
 
+## Capture Repeater
+
+Enable **Allow Repeater screenshots** in BurpCTL settings:
+
+```powershell
+burpctl.exe --instance INSTANCE repeater screenshot --output repeater.png
+```
+
+This saves a PNG of the main-window Repeater pane, including its current viewport and tab labels, even while another main tool is selected. Repeater must already have a usable layout; if it has not been initialized, open it once before capture. It does not switch tabs or send requests. Screenshot permission is separate from history permissions and allows sensitive content outside target scope; Montoya cannot verify the selected Repeater request's scope. Detached/minimized windows and unrecognized layouts are unsupported. Large panes above 4,194,304 pixels or PNGs above 8 MiB fail explicitly.
+
+Exports verify size and SHA-256, clean incomplete files and require `--force` to replace an existing file. Rendering runs on the EDT; PNG encoding and transfer run on a worker. There is no screenshot cache or background capture. The approach uses Swing component rendering, as demonstrated by [BurpSuiteSharpenerEx](https://github.com/irsdl/BurpSuiteSharpenerEx/blob/main/src/main/java/ninja/burpsuite/extension/sharpener/uiControllers/subTabs/SubTabsActions.java).
+
 ## Output and limits
 
 Filtering and field selection run in Java before serialization. `path` excludes the query string. Empty lists succeed. History ordering is unspecified; row limits cap returned matches, not traversal or Montoya allocations, and a limit hit does not prove that more matches exist.
@@ -55,6 +67,8 @@ The [BurpCTL Agent Skill](skills/burpctl/SKILL.md) covers instance selection and
 ## Build from source
 
 Use stable Rust and JDK 21. Set `JAVA_HOME` to the JDK. Gradle 9.2.1 is pinned by the wrapper; dependencies are locked and Gradle artifacts have checksum verification.
+
+The CLI release profile uses size optimization (`z`), ThinLTO and stripped symbols. On the tested Windows MSVC build, this reduced the executable from 986 to 665 KiB; 50 synthetic 8 MiB exports per profile had medians of 58.48 and 59.02 ms, with every SHA-256 verified. Sizes and timings depend on the compiler and host. Java remains a Java 21 JAR loaded by Burp's JVM.
 
 On Windows with MSVC build tools:
 
@@ -86,9 +100,11 @@ Packaging checks artifact versions and Java 21 bytecode, excludes bundled Montoy
 
 ## Verification
 
-Windows checks covered authenticated Rust/Java UDS, permissions, scope, field selection, instance ambiguity, lifecycle cleanup and incomplete exports. An actual Windows Temurin 21.0.12 runtime passed the production-server fixtures: 200 raw byte/hash comparisons and 100 Base64-prefix comparisons. A fix for intermittent EOF receive stalls passed 3,000 successive reads. Cargo fmt/check/clippy, two focused Rust checks on Linux and native Windows, Gradle build and release checks passed.
+Checks cover authenticated Rust/Java UDS, permissions, scope, field selection, instance ambiguity and incomplete exports. Production-server fixtures passed 200 raw byte/hash comparisons and 100 Base64-prefix comparisons on Windows Temurin 21.0.12. Cargo fmt/check/clippy, four focused Rust checks on Linux and native Windows, Gradle build and release packaging checks passed.
 
-Controlled five-minute idle samples with and without the extension showed no increase in Burp process I/O transfer counters. Heap grew in both samples without GC, so retained extension RAM is not established. An authorized workload added 20,000 unique loopback POSTs. Before request reuse, a no-match query allocated about 170 MiB on the IPC worker; this measures allocation churn, not retained memory or peak heap. The request-reuse change still needs live allocation measurements.
+History uses filtered Montoya traversal. `--limit` bounds returned rows, not Burp's internal allocations. Retained extension RAM and per-operation Burp peak memory have not been isolated by measurement.
+
+Production-entry-point fixtures passed 20 initialized unload/reload cycles and 20 immediate-unload races, including a socket waiting for a partial frame. These ran on the bundled Windows Java 26 runtime with Java 21 bytecode.
 
 Other open checks: Community edition, real Burp running Java 21, multiple real Burp windows, live HTTP/2/gzip, twenty real reloads, abrupt JVM crash recovery and Windows path races. Fixture checks do not establish those integrations.
 

@@ -79,7 +79,7 @@ Rust burpctl.exe → private instance metadata → authenticated Windows AF_UNIX
 ```
 
 - Version and `id` always required. `auth` is accepted only over the protected local IPC and never logged/echoed. Context values are checked against server identity; client-provided identity is not authority.
-- `method` is explicit, stable, dot-separated (`status`, `scope.check`, `history.list`, `history.get`). Exact allowlist in dispatcher, no arbitrary Montoya method invocation, reflection, class names or command execution.
+- `method` is explicit, stable, dot-separated (`status`, `scope.check`, `history.list`, `history.get`, `repeater.screenshot`). Exact allowlist in dispatcher, no arbitrary Montoya method invocation, reflection, class names or command execution.
 - `params` is strictly validated per operation; unknown fields/invalid enum/options fail with `INVALID_ARGUMENT`. No oversized values, regex without bounds or path traversal.
 - For local `status` discovery, credential file must be accessible to authorized CLI; no unauthenticated introspection exposing project metadata by default.
 
@@ -134,8 +134,8 @@ Stable codes: `INVALID_ARGUMENT`, `UNKNOWN_METHOD`, `AUTH_FAILED`, `PERMISSION_D
 
 ### 4.5 Streaming bytes for explicit exports
 
-- Only activated by a command such as `history get <id> --part request.body --raw --output file.bin`, after authorization.
-- The opening `0x01` control includes `version`, `id`, `ok:true`, `stream` and `meta`. `stream` has `kind:"raw_bytes"`, a known integer `size_bytes`, `chunk_max:65536` and a Montoya representation source. `meta` carries provenance, representation and `transformation:"none"`.
+- Activated by an explicit history raw export or `repeater screenshot --output file.png`, after operation-specific authorization.
+- The opening `0x01` control includes `version`, `id`, `ok:true`, `stream` and `meta`. `stream` has `kind:"raw_bytes"`, a known integer `size_bytes`, `chunk_max:65536` and a representation source. `meta` carries provenance, representation and transformation (`none` for history, `swing_rendered_png` for screenshots). The client preserves this metadata in the export result.
 - Follow with `0x02` frames containing at most 64 KiB of data. The terminal `0x01` control has `version`, `id` and `stream_end:{bytes_sent:N,sha256:"<hex>",complete:true}`.
 - After a successful terminal control, the peer must close the connection. The client rejects trailing bytes; on Windows it waits for EOF using nonblocking recv and deadline-bounded Winsock select.
 - If interrupted, send terminal `stream_error` control frame where possible; otherwise EOF means incomplete. Client must verify byte count/hash and reject partial export. When user explicitly names `--output`, a same-directory `.part` file for atomic replacement is permitted and deleted on failure; without `--output` do not write temp/cache files. Never overwrite an existing file without `--force`.
@@ -162,6 +162,9 @@ Stable codes: `INVALID_ARGUMENT`, `UNKNOWN_METHOD`, `AUTH_FAILED`, `PERMISSION_D
 | Raw export | 32 MiB maximum | Separate from control output budget |
 | Total rendered text | 32 KiB default; 256 KiB maximum | Token and terminal guard |
 | Concurrent expensive history scans | 1 | Prefer RAM/GUI stability to seconds latency |
+| Screenshot image / encoded PNG | 4,194,304 pixels / 8 MiB | Reject oversized views; never silently scale or truncate |
+| Screenshot capture/export | 1 per instance | Hold permit through rendering, encoding and transfer |
+| Screenshot EDT wait | 2 seconds | Cancel queued capture; an already-running paint may finish later |
 | Request workers | At most 2, no work queue; 1 overload worker | Bounded concurrency |
 | Connection / history callback deadline | 30 seconds / 20 seconds | Does not guarantee cancellation of Montoya |
 | In-flight binary stream | 1 per connection | Simple and bounded |
@@ -193,6 +196,7 @@ burpctl history list --status 500 --host example.com --fields id,path,status --f
 burpctl --instance INSTANCE history get 123 --project-id PROJECT --fields id,status
 burpctl --instance INSTANCE history get 123 --project-id PROJECT --part request.body --raw --output upload.bin
 burpctl scope check https://example.com/admin
+burpctl --instance INSTANCE repeater screenshot --output repeater.png
 ```
 
 ### Exit codes
@@ -212,11 +216,13 @@ Stderr error messages include stable error code; JSON mode emits valid structure
 
 ## 8. Authorization model
 
-Java enforces authentication, instance/project context, metadata/raw permissions, scope, output/body budgets and concurrency. Handcrafted IPC requests pass through the same dispatcher and policy as official CLI requests. There is no `--unsafe` bypass.
+Java enforces authentication, instance/project context, operation-specific permissions, history scope, output/body/image budgets and concurrency. Handcrafted IPC requests pass through the same dispatcher and policy as official CLI requests. There is no `--unsafe` bypass.
 
 Permissions are configured in a Montoya settings panel inside Burp Settings (search for `BurpCTL`). They remain in memory and reset on extension reload; there is no suite tab or settings persistence. Disabling metadata also revokes raw access. The panel is created once on the EDT when Burp requests its component; it has no polling or history queries.
 
 Status and scope checks require authentication. History requires metadata permission and in-scope rows; byte retrieval also requires raw permission. Scope membership does not establish engagement authorization. The CLI writes an export only when the operator supplies an output path.
+
+Screenshots require the independent `repeater_screenshot` permission (Settings: “Allow Repeater screenshots”), off by default and revoked on unload. This is a sensitive UI read, not a scope-filtered HTTP query: Montoya does not expose the selected Repeater request, so the extension cannot verify its scope. The opt-in permits Repeater pane content while its main tool is active or hidden, including headers, bodies, tab labels and out-of-scope data. History permissions remain independent. No URL supplied by a client is accepted as proof of the displayed request's identity or scope.
 
 ### Operation contracts
 
@@ -230,6 +236,11 @@ Every operation accepts `params.max_bytes` (1,024 to 262,144; default 32,768), c
 | `scope.check` | Required `url`: HTTP(S), host required, at most 4,096 characters, no credentials/fragment/control characters | `{url,in_scope}`; authenticated membership query; no target traffic. |
 | `history.list` | `limit`: 1 to 100, default 10; `fields`; `filters` with exact case-insensitive `host`, exact case-sensitive `method`, HTTP `status` 100 to 599, literal `path_contains` | `{items:[...]}`; metadata permission plus per-row scope; one expensive operation at a time. |
 | `history.get` | Required `id`: 0 to 2,147,483,647; optional `fields`; optional `part`, `encoding`, `body_max_bytes` | `{item:{...}}` or approved stream; metadata permission; selected message/bytes additionally require raw permission. |
+| `repeater.screenshot` | None | Approved PNG stream; independent screenshot permission; current Repeater view in the main Burp window only. CLI requires `--output`; optional `--force`. |
+
+Screenshot discovery starts from the documented `suiteFrame()` and inspects standard Swing containers on the EDT. It requires a unique main tab pane containing the exact English titles `Target`, `Proxy`, `Repeater`, and obtains the Repeater component directly without selecting it. Detached, minimized or unrecognized layouts fail `FEATURE_UNAVAILABLE`; a Repeater component with no usable dimensions also fails and asks the operator to open it once. Tree traversal is capped at 8,192 component/title visits and depth 32. The existing component dimensions/layout are used even when the main Repeater tab is hidden; no layout or visibility is forced. Only that viewport area is rendered; offscreen scrolled content and desktop overlays are excluded. The command does not navigate tabs, change viewport/layout or send traffic.
+
+PNG stream metadata includes `media_type:image/png`, width/height, `representation:repeater_viewport`, `transformation:swing_rendered_png` and instance/project provenance. This is a Swing-rendered view, not raw HTTP evidence or a desktop pixel capture. Rendering briefly occupies the EDT; PNG encoding and IPC/file I/O run off the EDT. Encoding uses memory-only ImageIO streams, not disk caches. Queued timed-out captures are canceled; the permit stays held until the EDT runnable drains, so further captures can return `BUSY`. Pixel/PNG limits do not guarantee paint duration, provider allocation bounds or immediate cancellation of custom UI painting. Screenshot permission and source project are rechecked during rendering and before every stream chunk.
 
 Metadata field allowlist: `id,method,host,path,status,has_response,port,secure`; defaults `id,method,host,path,status`. `path` uses `finalRequest().pathWithoutQuery()` to omit potentially sensitive query values; `path_contains` uses the same representation. Response metadata is accessed only when required by selected fields or filters. Scope validation necessarily accesses request URL metadata.
 
@@ -245,7 +256,7 @@ Java connection deadline is 30 seconds, history callback deadline 20 seconds, ov
 
 Raw opening/end controls include protocol version and request ID. The client rejects extra frames, wrong count/hash, EOF or stream error, and cleans `.part` files on failure. Exports do not overwrite without `--force`; no export path is sent to Java. Tiny ephemeral rendezvous files are the only production writes without an explicit export.
 
-The client validates exclusive response variants: a normal success requires an object result and completion metadata, an error requires code/message/retryable, and a raw export success requires an opening stream followed by verified bytes and a terminal control. A normal success cannot complete a requested raw export. Extension status and name use the JAR's `Implementation-Version` build metadata; source-classpath development runs report `development`.
+The client validates exclusive response variants: a normal success requires an object result and completion metadata, an error requires code/message/retryable, and a raw export success requires an opening stream followed by verified bytes and a terminal control. A normal success cannot complete a requested raw export. The extension display name is `BurpCTL`; status reports the JAR's `Implementation-Version` build metadata. Source-classpath development runs report `development`. Product versions and IPC protocol versions are independent; the IPC version remains 1.0.
 
 ## 9. Protocol change discipline
 

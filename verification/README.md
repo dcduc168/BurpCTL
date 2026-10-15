@@ -6,14 +6,15 @@ Run these checks from a source checkout after building the Windows CLI and exten
 
 | Change | Check |
 |---|---|
-| Rust client, arguments or output | Cargo fmt/check/clippy and the two focused IPC checks |
-| Java dispatcher, authentication, policy or unload | Gradle build, `StatusSmoke` and `SettingsSmoke` |
+| Rust client, arguments or output | Cargo fmt/check/clippy and the focused IPC checks |
+| Java dispatcher, authentication, policy or unload | Gradle build, `StatusSmoke`, `SettingsSmoke` and `LifecycleSmoke` |
 | History filters, field selection or byte handling | `HistorySmoke`, then the native corpus check |
 | Raw streaming or destination handling | Native corpus and `windows-partial.ps1` |
+| Repeater screenshot | `ScreenshotSmoke`, native PNG export and live visible/offscreen Repeater capture |
 | Protocol examples or release packaging | `release-checks.py` |
 | Performance claim | `windows-bench.ps1` and controlled Burp resource samples |
 
-There is no unit-test framework. The Rust checks use Cargo's built-in runner; the Java checks are executable classes with assertions.
+There is no unit-test framework. The Rust checks use Cargo's built-in runner; the Java checks are executable classes with assertions. The Rust export check rejects a completed stream with a wrong SHA-256 hash and requires cleanup of the destination and temporary file. The terminal-output check verifies buffer reuse for safe text and escaping of control and bidi characters.
 
 ## Build checks
 
@@ -42,13 +43,19 @@ $cli = (Resolve-Path 'cli\target\x86_64-pc-windows-msvc\release\burpctl.exe').Pa
 New-Item -ItemType Directory -Force $classes | Out-Null
 $classpath = "$classes;$extension;$montoya"
 
-& $javac --release 21 -cp "$extension;$montoya" -d $classes verification\StatusSmoke.java verification\TrafficFixture.java verification\HistorySmoke.java verification\HistoryServer.java verification\PartialSmokeServer.java verification\SettingsSmoke.java
+& $javac --release 21 -cp "$extension;$montoya" -d $classes verification\StatusSmoke.java verification\TrafficFixture.java verification\HistorySmoke.java verification\HistoryServer.java verification\PartialSmokeServer.java verification\SettingsSmoke.java verification\LifecycleSmoke.java verification\ScreenshotSmoke.java
 & $java -cp $classpath StatusSmoke
 & $java -cp $classpath HistorySmoke
 & $java -cp $classpath SettingsSmoke
+& $java -cp $classpath LifecycleSmoke
+& $java -cp $classpath ScreenshotSmoke
 ```
 
-Check each native command's exit code before continuing. `StatusSmoke` covers malformed frames, authentication/context/schema denial before Montoya, overload and cleanup. `HistorySmoke` covers scope, concurrent callback limits, projection without body reads, UTF-8 failures, missing responses and exact bytes. `SettingsSmoke` checks lazy EDT construction, search keywords, keyboard/accessibility labels, metadata/raw dependency and permission revocation after unload.
+Check each native command's exit code before continuing. `StatusSmoke` covers a stalled partial-frame deadline, malformed frames, authentication/context/schema denial before Montoya, overload and cleanup. `HistorySmoke` covers scope, concurrent callback limits, projection without body reads, UTF-8 failures, missing responses and exact bytes. It also checks that host/method/path/status mismatches skip URL/scope work and that ID lookup retains scope checks before acceptance and output. `SettingsSmoke` checks lazy EDT construction, search keywords, keyboard/accessibility labels, metadata/raw dependency and permission revocation after unload.
+
+`LifecycleSmoke` calls the production extension entry point for 20 initialized unload/reload cycles and 20 immediate-unload races. It checks fresh identities, permission reset, settings deregistration and socket/worker cleanup while a partial frame is waiting. These are synthetic-host checks, not 20 actual Burp reloads.
+
+`ScreenshotSmoke` opens a temporary synthetic Swing window and checks permission denial before UI access, PNG pixels/dimensions, independent screenshot policy, one-operation concurrency, pixel-identical hidden capture without selecting Repeater, uninitialized/oversized views and queued EDT timeout cancellation. Its `serve` argument exposes that synthetic view through production IPC; select the `fixture-project` instance and run `repeater screenshot --output PATH`. Stop it with stdin after verification. No target traffic is sent.
 
 ## Native corpus and interrupted exports
 
@@ -73,7 +80,7 @@ Select the instance whose project ID is `fixture-project`. The corpus check requ
 .\verification\windows-partial.ps1 -Java $java -Classpath $classpath -Cli $cli
 ```
 
-This script starts and stops its own fixture. It interrupts a stream after a chunk and requires no published destination or leftover `.part` file. If a real Burp instance is also running, it checks ambiguous selection.
+This script starts and stops its own fixture. It requires `PARTIAL_TRANSFER`, confirms the fixture sent its first chunk, and checks that no destination or `.part` file remains. A connection error before streaming does not pass. If a real Burp instance is also running, it checks ambiguous selection.
 
 ## Live Burp
 

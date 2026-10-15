@@ -1,6 +1,6 @@
 ---
 name: burpctl
-description: Read authorized Burp Suite proxy history through the native Windows BurpCTL CLI, check scope, and retrieve exact message bytes. Use when a BurpCTL extension is available; v1 does not send traffic or mutate projects.
+description: Read authorized Burp Suite proxy history, check scope, retrieve exact message bytes, and capture the Repeater pane through the native Windows BurpCTL CLI. Use when a BurpCTL extension is available; commands do not send traffic or mutate projects.
 ---
 
 Use the short-lived `burpctl.exe`; from WSL invoke the Windows executable, not the Linux development build. Discover syntax with `--help` and `<command> --help` rather than guessing flags.
@@ -28,3 +28,11 @@ Bodies are bytes. UTF-8 previews reject invalid sequences; Base64 previews can b
 History traversal may visit the entire collection. A row limit bounds accepted results, not Montoya allocations or scan time. Ordering is unspecified; a limit hit does not prove more matches exist. `path` omits query strings. Empty lists succeed. Scope membership does not grant engagement authorization.
 
 Check exit codes and structured errors. Do not treat denial, timeout, truncation, stale context, or an incomplete export as a completed retrieval. Reloads invalidate instance IDs and reset permissions; relist and obtain fresh references.
+
+For a Repeater screenshot, enable the independent screenshot permission in BurpCTL settings while leaving any main tool selected:
+
+```text
+burpctl.exe --instance INSTANCE repeater screenshot --output repeater.png
+```
+
+Capture only content the operator authorizes. This PNG includes the current viewport/tab labels and can contain headers, bodies or out-of-scope data; it has no scope guarantee or raw-message fidelity. The command renders an already-initialized main-window Repeater pane offscreen without changing the selected tool or layout. If Repeater has no layout yet, open it once. The command does not navigate/send. It rejects unsupported layouts and oversized views, verifies size/hash, and publishes only to an explicit path; do not use `--force` without authorization to replace the destination. Timeout does not prove an already-running paint stopped.

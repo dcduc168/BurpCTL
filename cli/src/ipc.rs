@@ -301,11 +301,13 @@ fn receive_export(
             file.persist_noclobber(&options.output)
                 .map_err(|error| error.error)?;
         }
+        let mut meta = opening["meta"].clone();
+        meta["complete"] = true.into();
+        meta["truncated"] = false.into();
         return Ok(
             serde_json::json!({"version":opening["version"],"id":opening["id"],"ok":true,
             "result":{"bytes_written":received,"sha256":hash},
-            "meta":{"complete":true,"truncated":false,"provenance":opening["meta"]["provenance"],
-                "representation":opening["meta"]["representation"],"transformation":"none"}}),
+            "meta":meta}),
         );
     }
 }

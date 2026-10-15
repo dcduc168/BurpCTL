@@ -1,6 +1,9 @@
 [package]
 name = "burpctl"
 version = "0.1.0"
+description = "Lightweight authenticated local interface to Burp Suite"
+repository = "https://github.com/dcduc168/BurpCTL"
+readme = "../README.md"
 edition = "2024"
 rust-version = "1.85"
 

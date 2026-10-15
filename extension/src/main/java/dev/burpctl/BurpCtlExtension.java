@@ -10,7 +10,7 @@ import javax.swing.*;
 public final class BurpCtlExtension implements BurpExtension {
     @Override
     public void initialize(MontoyaApi api) {
-        api.extension().setName("BurpCTL " + Server.EXTENSION_VERSION);
+        api.extension().setName("BurpCTL");
         var policy = new Policy();
         var server = new Server(api, policy);
         var settings = new PermissionSettings(api.userInterface(), policy);
@@ -30,7 +30,7 @@ public final class BurpCtlExtension implements BurpExtension {
         var startup = new Thread(() -> {
             try {
                 server.start();
-                if (!stopped.get()) api.logging().logToOutput("BurpCTL ready; authenticated status enabled.");
+                if (!stopped.get()) api.logging().logToOutput("BurpCTL ready (" + Server.EXTENSION_VERSION + ").");
             } catch (Exception e) {
                 server.close();
                 if (!stopped.get()) api.logging().logToError("BurpCTL startup failed: " + e.getClass().getSimpleName() + "; check Windows runtime path and ACL support.");

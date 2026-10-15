@@ -7,6 +7,7 @@ import dev.burpctl.ipc.Fault;
 import dev.burpctl.security.Policy;
 import dev.burpctl.features.Scope;
 import dev.burpctl.features.History;
+import dev.burpctl.features.Screenshot;
 import java.io.IOException;
 import java.net.StandardProtocolFamily;
 import java.net.UnixDomainSocketAddress;
@@ -33,6 +34,7 @@ public final class Server implements AutoCloseable {
     private final MontoyaApi api;
     private final Policy policy;
     private final History history;
+    private final Screenshot screenshot;
     private final Set<Frames> activeFrames = ConcurrentHashMap.newKeySet();
     private final Set<SocketChannel> clients = ConcurrentHashMap.newKeySet();
     private final String instance = random(16);
@@ -44,7 +46,7 @@ public final class Server implements AutoCloseable {
     private ThreadPoolExecutor rejector;
     private volatile boolean closed;
     public Server(MontoyaApi api) { this(api, new Policy()); }
-    public Server(MontoyaApi api, Policy policy) { this.api = api; this.policy = policy; this.history = new History(api, policy); }
+    public Server(MontoyaApi api, Policy policy) { this.api = api; this.policy = policy; this.history = new History(api, policy); this.screenshot = new Screenshot(api, policy); }
     private static String random(int length) {
         byte[] bytes = new byte[length]; new SecureRandom().nextBytes(bytes);
         return HexFormat.of().formatHex(bytes);
@@ -130,6 +132,14 @@ public final class Server implements AutoCloseable {
                 catch (RuntimeException error) { response = error(id, "INTERNAL_ERROR"); }
                 if (response instanceof RawResponse raw) {
                     try (var export = raw.export()) { stream(frames, raw); }
+                } else if (response instanceof ScreenshotResponse image) {
+                    try (var export = image.export()) {
+                        sendStream(frames, image.id(), image.budget(), export.bytes().length, "swing_repeater_png",
+                                Map.of("provenance", Map.of("instance_id", instance, "project_id", project),
+                                        "representation", "repeater_viewport", "transformation", "swing_rendered_png",
+                                        "media_type", "image/png", "width", export.width(), "height", export.height()),
+                                index -> export.bytes()[index], this::checkScreenshot);
+                    }
                 } else {
                     if (response instanceof Map<?, ?> envelope && Boolean.TRUE.equals(envelope.get("ok")) &&
                             request.get("method") instanceof String method && method.startsWith("history.")) {
@@ -162,7 +172,7 @@ public final class Server implements AutoCloseable {
         long budget = params.getOrDefault("max_bytes", 32768L) instanceof Long number ? number : -1;
         if (budget < 1024 || budget > Frames.MAX_PAYLOAD) throw new Fault("INVALID_ARGUMENT");
         if (!(request.get("method") instanceof String method)) throw new Fault("INVALID_ARGUMENT");
-        if (!java.util.Set.of("status", "scope.check", "history.list", "history.get").contains(method)) throw new Fault("UNKNOWN_METHOD");
+        if (!java.util.Set.of("status", "scope.check", "history.list", "history.get", "repeater.screenshot").contains(method)) throw new Fault("UNKNOWN_METHOD");
         keys(params, switch (method) {
             case "scope.check" -> Set.of("max_bytes", "url");
             case "history.list" -> Set.of("max_bytes", "limit", "fields", "filters");
@@ -173,7 +183,9 @@ public final class Server implements AutoCloseable {
         if (method.equals("scope.check")) Scope.url(params.get("url"));
         if (method.startsWith("history.")) policy.requireMetadata();
         if (method.equals("history.get") && params.containsKey("part")) policy.requireRaw();
+        if (method.equals("repeater.screenshot")) policy.requireScreenshot();
         if (!project.equals(api.project().id())) throw new Fault("STALE_REFERENCE");
+        if (method.equals("repeater.screenshot")) return new ScreenshotResponse(id, screenshot.capture(this::checkScreenshot), (int)budget);
         Object result;
         var meta = new java.util.LinkedHashMap<String, Object>(Map.of("complete", true, "truncated", false));
         if (method.equals("scope.check")) result = new Scope(api).check(params);
@@ -183,8 +195,8 @@ public final class Server implements AutoCloseable {
             result = query.result(); meta.putAll(query.meta());
             meta.put("provenance", Map.of("instance_id", instance, "project_id", project));
         } else result = Map.of("instance_id", instance, "project_id", project, "extension_version", EXTENSION_VERSION,
-                "burp_version", api.burpSuite().version().toString(), "methods", java.util.List.of("status", "scope.check", "history.list", "history.get"),
-                "permissions", Map.of("history_metadata", policy.metadata.get(), "history_raw", policy.raw.get()));
+                "burp_version", api.burpSuite().version().toString(), "methods", java.util.List.of("status", "scope.check", "history.list", "history.get", "repeater.screenshot"),
+                "permissions", Map.of("history_metadata", policy.metadata.get(), "history_raw", policy.raw.get(), "repeater_screenshot", policy.screenshot.get()));
         if (!project.equals(api.project().id())) throw new Fault("STALE_REFERENCE");
         if (method.startsWith("history.")) policy.requireMetadata();
         if (method.equals("history.get") && params.containsKey("part")) policy.requireRaw();
@@ -193,39 +205,49 @@ public final class Server implements AutoCloseable {
         return response;
     }
     private record RawResponse(String id, History.Export export, int budget) {}
+    private record ScreenshotResponse(String id, Screenshot.Export export, int budget) {}
+    private void checkScreenshot() {
+        if (closed) throw new Fault("FEATURE_UNAVAILABLE");
+        policy.requireScreenshot();
+        if (!project.equals(api.project().id())) throw new Fault("STALE_REFERENCE");
+    }
     private void stream(Frames frames, RawResponse response) throws IOException {
         var export = response.export();
+        String representation = export.part().startsWith("request") ? "final_" + export.part() : export.part();
+        sendStream(frames, response.id(), response.budget(), export.bytes().length(),
+                "montoya_" + representation.replace('.', '_'),
+                Map.of("provenance", Map.of("instance_id", instance, "project_id", project, "history_id", export.row().id()),
+                        "representation", representation, "transformation", "none"),
+                index -> export.bytes().getByte(index), () -> {
+                    export.check();
+                    if (!project.equals(api.project().id())) throw new Fault("STALE_REFERENCE");
+                });
+    }
+    private void sendStream(Frames frames, String id, int budget, int size, String source, Map<String, Object> meta,
+                            java.util.function.IntUnaryOperator byteAt, Runnable check) throws IOException {
         boolean opened = false;
         try {
-            export.check();
-            if (!project.equals(api.project().id())) throw new Fault("STALE_REFERENCE");
-            String representation = export.part().startsWith("request") ? "final_" + export.part() : export.part();
-            var opening = Map.of("version", VERSION, "id", response.id(), "ok", true,
-                    "stream", Map.of("kind", "raw_bytes", "size_bytes", export.bytes().length(), "chunk_max", 65536,
-                            "source", "montoya_" + representation.replace('.', '_')),
-                    "meta", Map.of("provenance", Map.of("instance_id", instance, "project_id", project, "history_id", export.row().id()),
-                            "representation", representation, "transformation", "none"));
-            Json.bytes(opening, response.budget());
+            check.run();
+            var opening = Map.of("version", VERSION, "id", id, "ok", true,
+                    "stream", Map.of("kind", "raw_bytes", "size_bytes", size, "chunk_max", 65536, "source", source), "meta", meta);
+            Json.bytes(opening, budget);
             frames.write(opening); opened = true;
             var digest = java.security.MessageDigest.getInstance("SHA-256");
             byte[] buffer = new byte[65536];
-            int total = export.bytes().length();
+            int total = size;
             for (int offset = 0; offset < total;) {
-                export.check();
-                if (!project.equals(api.project().id())) throw new Fault("STALE_REFERENCE");
+                check.run();
                 int length = Math.min(buffer.length, total - offset);
-                for (int i = 0; i < length; i++) buffer[i] = export.bytes().getByte(offset + i);
-                export.check();
-                if (!project.equals(api.project().id())) throw new Fault("STALE_REFERENCE");
+                for (int i = 0; i < length; i++) buffer[i] = (byte)byteAt.applyAsInt(offset + i);
+                check.run();
                 digest.update(buffer, 0, length);
                 frames.binary(buffer, length); offset += length;
             }
-            export.check();
-            if (!project.equals(api.project().id())) throw new Fault("STALE_REFERENCE");
-            frames.write(Map.of("version", VERSION, "id", response.id(), "stream_end",
+            check.run();
+            frames.write(Map.of("version", VERSION, "id", id, "stream_end",
                     Map.of("bytes_sent", total, "sha256", HexFormat.of().formatHex(digest.digest()), "complete", true)));
         } catch (Fault e) {
-            frames.write(opened ? Map.of("version", VERSION, "id", response.id(), "stream_error", Map.of("code", e.code)) : error(response.id(), e.code));
+            frames.write(opened ? Map.of("version", VERSION, "id", id, "stream_error", Map.of("code", e.code)) : error(id, e.code));
         } catch (java.security.NoSuchAlgorithmException e) { throw new AssertionError(e); }
     }
     private static Map<String, Object> object(Object value) {
