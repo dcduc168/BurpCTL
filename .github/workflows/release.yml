@@ -1,4 +1,4 @@
-name: Release build
+name: Release
 
 on:
   push:
@@ -13,16 +13,10 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build:
-    name: Windows x86_64 and Java 21
-    runs-on: windows-2025
-    timeout-minutes: 30
-    defaults:
-      run:
-        shell: pwsh
-    env:
-      RUSTUP_TOOLCHAIN: '1.98.1'
-      CARGO_TERM_COLOR: always
+  version:
+    name: Validate version
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
     outputs:
       version: ${{ steps.version.outputs.version }}
       prerelease: ${{ steps.version.outputs.prerelease }}
@@ -31,13 +25,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-
-      - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version: '3.14'
-
-      - name: Validate release version
+      - name: Validate product and tag versions
         id: version
         shell: python
         run: |
@@ -53,87 +41,129 @@ jobs:
               output.write(f'version={version}\n')
               output.write(f'prerelease={str("-" in version.split("+", 1)[0]).lower()}\n')
 
+  build:
+    name: ${{ matrix.platform }}
+    needs: version
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: Windows x86_64
+            runner: windows-2025
+            target: x86_64-pc-windows-msvc
+            asset: burpctl-windows-x86_64.exe
+          - platform: Linux x86_64
+            runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            asset: burpctl-linux-x86_64
+          - platform: Linux ARM64
+            runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            asset: burpctl-linux-aarch64
+          - platform: macOS Intel
+            runner: macos-15-intel
+            target: x86_64-apple-darwin
+            asset: burpctl-macos-x86_64
+          - platform: macOS Apple Silicon
+            runner: macos-15
+            target: aarch64-apple-darwin
+            asset: burpctl-macos-aarch64
+    defaults:
+      run:
+        shell: bash
+    env:
+      RUSTUP_TOOLCHAIN: '1.98.1'
+      CARGO_TERM_COLOR: always
+      BUILD_TARGET: ${{ matrix.target }}
+      ASSET_NAME: ${{ matrix.asset }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.14'
       - name: Set up Java
         uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
         with:
           distribution: temurin
           java-version: '21.0.12+8.0.LTS'
           verify-signature: true
-
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
         with:
           cache-disabled: true
-
       - name: Install Rust toolchain
-        run: |
-          $PSNativeCommandUseErrorActionPreference = $true
-          rustup toolchain install $env:RUSTUP_TOOLCHAIN --profile minimal --component rustfmt --component clippy --target x86_64-pc-windows-msvc
-
+        run: rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --component rustfmt --component clippy --target "$BUILD_TARGET"
       - name: Check and build CLI
         run: |
-          $PSNativeCommandUseErrorActionPreference = $true
+          set -euo pipefail
           cargo fmt --manifest-path cli/Cargo.toml -- --check
-          cargo check --manifest-path cli/Cargo.toml --target x86_64-pc-windows-msvc --locked
-          cargo clippy --manifest-path cli/Cargo.toml --target x86_64-pc-windows-msvc --locked --all-targets -- -D warnings
-          cargo test --manifest-path cli/Cargo.toml --target x86_64-pc-windows-msvc --release --locked
-          cargo build --manifest-path cli/Cargo.toml --target x86_64-pc-windows-msvc --release --locked
-
+          cargo check --manifest-path cli/Cargo.toml --target "$BUILD_TARGET" --locked
+          cargo clippy --manifest-path cli/Cargo.toml --target "$BUILD_TARGET" --locked --all-targets -- -D warnings
+          cargo test --manifest-path cli/Cargo.toml --target "$BUILD_TARGET" --release --locked
+          cargo build --manifest-path cli/Cargo.toml --target "$BUILD_TARGET" --release --locked
       - name: Build extension
+        shell: python
         run: |
-          $PSNativeCommandUseErrorActionPreference = $true
-          .\extension\gradlew.bat -p extension build --no-daemon
-
-      - name: Check Java and native IPC fixtures
-        run: .\verification\windows-checks.ps1 -Classes (Join-Path $env:RUNNER_TEMP 'burpctl-checks')
-
+          import os, pathlib, subprocess
+          wrapper = str(pathlib.Path('extension/gradlew.bat').resolve()) if os.name == 'nt' else './extension/gradlew'
+          subprocess.run([wrapper, '-p', 'extension', 'build', '--no-daemon'], check=True)
+      - name: Check native IPC, permissions and byte exports
+        shell: python
+        run: |
+          import os, pathlib, subprocess
+          cli = pathlib.Path('cli/target') / os.environ['BUILD_TARGET'] / 'release' / ('burpctl.exe' if os.name == 'nt' else 'burpctl')
+          subprocess.run(['python', 'verification/checks.py', '--cli', str(cli)], check=True)
       - name: Verify release artifacts
-        run: python verification/release-checks.py
-
-      - name: Stage release artifacts
+        run: python verification/release-checks.py --target "$BUILD_TARGET"
+      - name: Stage release assets
         shell: python
         run: |
           import os, pathlib, shutil
           output = pathlib.Path(os.environ['RUNNER_TEMP']) / 'release'
           output.mkdir()
-          shutil.copy2('cli/target/x86_64-pc-windows-msvc/release/burpctl.exe', output / 'burpctl.exe')
-          shutil.copy2('extension/build/libs/burpctl-extension.jar', output / 'burpctl-extension.jar')
-
-      - name: Upload release artifacts
+          cli = pathlib.Path('cli/target') / os.environ['BUILD_TARGET'] / 'release' / ('burpctl.exe' if os.name == 'nt' else 'burpctl')
+          shutil.copy2(cli, output / os.environ['ASSET_NAME'])
+          if os.environ['BUILD_TARGET'] == 'x86_64-pc-windows-msvc':
+              shutil.copy2('extension/build/libs/burpctl-extension.jar', output / 'burpctl-extension.jar')
+      - name: Upload verified assets
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: burpctl-windows-x86_64
-          path: |
-            ${{ runner.temp }}/release/burpctl.exe
-            ${{ runner.temp }}/release/burpctl-extension.jar
+          name: release-${{ matrix.target }}
+          path: ${{ runner.temp }}/release/*
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
 
-  draft-release:
+  release:
     name: Create draft release
-    needs: build
+    needs: [version, build]
     if: github.event_name == 'push' && github.ref_type == 'tag'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
       contents: write
     steps:
-      - name: Download release artifacts
+      - name: Download verified assets
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: burpctl-windows-x86_64
+          pattern: release-*
+          merge-multiple: true
           path: release
           digest-mismatch: error
-
-      - name: Create draft with verified assets
+      - name: Create draft release
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ github.ref_name }}
-          VERSION: ${{ needs.build.outputs.version }}
-          PRERELEASE: ${{ needs.build.outputs.prerelease }}
+          VERSION: ${{ needs.version.outputs.version }}
+          PRERELEASE: ${{ needs.version.outputs.prerelease }}
         run: |
           set -euo pipefail
           notes=$(gh api --method POST "repos/$GH_REPO/releases/generate-notes" \
@@ -145,6 +175,6 @@ jobs:
           fi
           flags=()
           if [[ "$PRERELEASE" == true ]]; then flags+=(--prerelease); fi
-          gh release create "$RELEASE_TAG" release/burpctl.exe release/burpctl-extension.jar \
+          gh release create "$RELEASE_TAG" release/* \
             --repo "$GH_REPO" --verify-tag --draft --title "$VERSION" \
             --notes-file "$RUNNER_TEMP/release-notes.md" "${flags[@]}"

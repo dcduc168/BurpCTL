@@ -1,15 +1,25 @@
 # BurpCTL
 
-Read Burp Suite status, scope and proxy history from a native Windows CLI. BurpCTL queries Montoya on demand and returns selected fields or exact message bytes. It keeps no history cache or index.
+Read Burp Suite status, scope and proxy history from a native CLI for Windows, Linux and macOS. BurpCTL queries Montoya on demand and returns selected fields or exact message bytes. It keeps no history cache or index.
 
-BurpCTL `0.1.0` is the first release. It supports `status`, `instance list`, `history list`, `history get`, `scope check` and `repeater screenshot`, and has been exercised with Burp Suite Professional 2026.10. Remaining acceptance checks are listed under [verification](#verification).
+BurpCTL `0.2.0` adds native Linux and macOS support. It supports `status`, `instance list`, `history list`, `history get`, `scope check` and `repeater screenshot`, and has been exercised with Burp Suite Professional 2026.10. Remaining acceptance checks are listed under [verification](#verification).
 
 ## Get started
 
-Download `burpctl.exe` and `burpctl-extension.jar` from the [latest release](https://github.com/dcduc168/BurpCTL/releases/latest), or [build from source](#build-from-source), then:
+Download the CLI for your OS/architecture and `burpctl-extension.jar` from the [latest release](https://github.com/dcduc168/BurpCTL/releases/latest), or [build from source](#build-from-source).
 
-1. Copy `burpctl.exe` to local NTFS and add its directory to Windows PATH. The MSVC build requires `VCRUNTIME140.dll`; loading the executable from a WSL share was slower on the tested host.
-2. Load `burpctl-extension.jar` as a Java extension in Burp. The extension needs Java 21 or later and Montoya 2026.7 APIs.
+| Platform | CLI asset |
+|---|---|
+| Windows x86_64 | `burpctl-windows-x86_64.exe` |
+| Linux x86_64 / ARM64 | `burpctl-linux-x86_64` / `burpctl-linux-aarch64` |
+| macOS Intel / Apple Silicon | `burpctl-macos-x86_64` / `burpctl-macos-aarch64` |
+
+Rename the CLI to `burpctl.exe` on Windows or `burpctl` on Unix. On Linux/macOS, run `chmod +x burpctl` and put it in a directory on PATH. Linux builds use GNU libc on Ubuntu 24.04; compatibility with older distributions is unverified. macOS binaries are not Developer ID signed or notarized; macOS may require approval before running a downloaded binary.
+
+Then:
+
+1. On Windows, copy `burpctl.exe` to local NTFS and add its directory to PATH. The MSVC build requires `VCRUNTIME140.dll`; loading the executable from a WSL share was slower on the tested host.
+2. Load `burpctl-extension.jar` as a Java extension in Burp. The extension needs Java 21 or later and Montoya 2026.7 APIs. Unix runtimes must include the JDK `jdk.security.auth` module.
 3. Open Burp Settings and search for `BurpCTL`. Enable metadata reads for history you authorize local tooling to access. Enable raw reads separately when you need message or body bytes.
 
 History permissions start disabled and reset on reload. History reads require Burp scope membership as well as permission; scope membership alone does not establish engagement authorization.
@@ -24,7 +34,7 @@ burpctl.exe --instance INSTANCE scope check https://example.com/admin
 
 Replace `INSTANCE` with an ID from `instance list`. If several instances are running, select one explicitly. These commands send no target traffic.
 
-From WSL, call the Windows executable: `/mnt/c/Tools/burpctl.exe status`. The Linux build is for development checks and cannot connect to Windows sockets. Use `--help` or `<command> --help` for the available options.
+On Linux/macOS, use `burpctl` in the examples below. CLI and Burp must run on the same OS. When Burp runs on Windows, WSL must call `/mnt/c/Tools/burpctl.exe`; a native Linux process cannot connect to its Windows socket. Use `--help` or `<command> --help` for the available options.
 
 ## Retrieve evidence
 
@@ -85,26 +95,23 @@ rustup target add x86_64-pc-windows-msvc
 cargo xwin build --manifest-path cli/Cargo.toml --target x86_64-pc-windows-msvc --release --locked
 ```
 
-Outputs:
-
-- CLI: `cli/target/x86_64-pc-windows-msvc/release/burpctl.exe`
-- Extension: `extension/build/libs/burpctl-extension.jar`
-
-Validate matching artifacts with Python 3.11 or later on Windows, or WSL with Windows interop:
+On Linux/macOS, build natively with the host target from `rustc -vV`:
 
 ```sh
-python3 scripts/check-release.py
+./extension/gradlew -p extension build --no-daemon
+cargo build --manifest-path cli/Cargo.toml --target HOST_TARGET --release --locked
+python3 scripts/check-release.py --target HOST_TARGET
 ```
 
-This checks CLI/JAR versions, Java 21 bytecode and that Montoya classes are not bundled.
+Replace `HOST_TARGET` with the host triple, such as `aarch64-apple-darwin`. The CLI is in `cli/target/HOST_TARGET/release/`; the shared extension JAR is `extension/build/libs/burpctl-extension.jar`. On Windows use `python scripts/check-release.py`; for a Windows cross-build from WSL, specify `--target x86_64-pc-windows-msvc`. The check validates native executable format, CLI/JAR versions, Java 21 bytecode and that Montoya classes are not bundled.
 
 ## GitHub release builds
 
-The [release workflow](.github/workflows/release.yml) builds on Windows Server 2025 with Rust 1.98.1, Temurin 21.0.12 and the pinned Gradle wrapper. It checks the CLI, Java fixtures, native raw/Base64 transfers, interrupted exports and release artifact validation. Live Burp and Repeater UI verification remain manual.
+The [release workflow](.github/workflows/release.yml) builds and runs the native CLI and Java IPC fixtures on Windows x86_64, Linux x86_64/ARM64, and macOS Intel/Apple Silicon runners. Rust 1.98.1, Temurin 21.0.12 and the Gradle wrapper are pinned. Checks cover permissions, raw/Base64 transfers, interrupted exports and artifact versions. Live Burp and Repeater UI verification remain manual.
 
-Push a tag matching the product version, such as `v0.1.0`, to build `burpctl.exe` and `burpctl-extension.jar` as separate release assets. The workflow creates a draft GitHub release after the checks pass; versions with a prerelease suffix are marked as prereleases. Release titles use only the version; notes contain the Full Changelog link. Review and publish the draft separately. Existing releases are never overwritten; a failed run that already created a draft needs that draft removed before retrying.
+Push a tag matching the product version, such as `v0.2.0`. After every platform passes, the workflow creates a draft release containing five standalone CLI binaries and one shared JAR. All assets come from GitHub runner builds. Titles use only the version; notes contain the Full Changelog link. Review and publish the draft separately. Existing releases are never overwritten.
 
-For a build without creating a release, select **Release build → Run workflow** in GitHub Actions. The two binaries are retained as workflow artifacts for 14 days. The workflow must first exist on the default branch to enable this control.
+For a build without creating a release, select **Release → Run workflow** in GitHub Actions. Verified assets are retained for 14 days.
 
 ## Verification
 
@@ -114,7 +121,7 @@ History uses filtered Montoya traversal. `--limit` bounds returned rows, not Bur
 
 Production-entry-point fixtures passed 20 initialized unload/reload cycles and 20 immediate-unload races, including a socket waiting for a partial frame. These ran on the bundled Windows Java 26 runtime with Java 21 bytecode.
 
-Other open checks: Community edition, real Burp running Java 21, multiple real Burp windows, live HTTP/2/gzip, twenty real reloads, abrupt JVM crash recovery and Windows path races. Fixture checks do not establish those integrations.
+Other open checks: live Burp on Linux/macOS, Community edition, real Burp running Java 21, multiple real Burp windows, live HTTP/2/gzip, twenty real reloads, abrupt JVM crash recovery and Windows path races. Fixture checks do not establish those integrations.
 
 The [verification guide](verification/README.md) explains how to run the retained checks.
 

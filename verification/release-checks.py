@@ -1,4 +1,5 @@
 """Focused checks for golden frames and matching release artifacts."""
+import argparse
 import hashlib
 import importlib.util
 import json
@@ -15,6 +16,11 @@ assert len(checksum) == 64 and all(character in '0123456789abcdef' for character
 spec = importlib.util.spec_from_file_location('release', root / 'scripts/check-release.py')
 release = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(release)
+
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('--target', choices=release.TARGETS, default=release.native_target())
+args = parser.parse_args()
+target = args.target
 
 for name in ['status-request', 'history-list-response']:
     payload = (root / f'protocol/examples/{name}.json').read_bytes().rstrip(b'\n')
@@ -36,17 +42,17 @@ assert ending['stream_end']['sha256'] == hashlib.sha256(body).hexdigest()
 with tempfile.TemporaryDirectory(prefix='burpctl-release-check-') as directory:
     release.root = Path(directory)
     inputs = ['cli/Cargo.toml', 'extension/build.gradle.kts',
-              'cli/target/x86_64-pc-windows-msvc/release/burpctl.exe', 'extension/build/libs/burpctl-extension.jar']
+              release.cli_path(target), 'extension/build/libs/burpctl-extension.jar']
     for relative in inputs:
         destination = release.root / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(root / relative, destination)
-    release.check_release()
-    cli = release.root / 'cli/target/x86_64-pc-windows-msvc/release/burpctl.exe'
+    release.check_release(target)
+    cli = release.root / release.cli_path(target)
     missing = cli.with_suffix('.missing')
     cli.rename(missing)
     try:
-        release.check_release()
+        release.check_release(target)
         raise AssertionError('Missing CLI accepted')
     except FileNotFoundError:
         pass
@@ -58,7 +64,7 @@ with tempfile.TemporaryDirectory(prefix='burpctl-release-check-') as directory:
         path = release.root / relative
         path.write_text(path.read_text().replace(f'version = "{version}"', 'version = "99.0.0"'))
     try:
-        release.check_release()
+        release.check_release(target)
         raise AssertionError('Stale extension accepted')
     except ValueError as error:
         assert 'Extension artifact version' in str(error)
@@ -71,7 +77,7 @@ with tempfile.TemporaryDirectory(prefix='burpctl-release-check-') as directory:
         for name, data in entries.items():
             package.writestr(name, data)
     try:
-        release.check_release()
+        release.check_release(target)
         raise AssertionError('Stale CLI accepted')
     except ValueError as error:
         assert 'CLI artifact version' in str(error)
