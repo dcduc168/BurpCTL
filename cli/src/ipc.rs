@@ -340,7 +340,7 @@ mod tests {
             let started = Instant::now();
             let result = eof(&mut client, started + Duration::from_millis(100));
             match scenario {
-                0 => assert!(result.is_ok()),
+                0 => assert!(result.is_ok(), "EOF failed: {result:?}"),
                 1 => assert_eq!(result.unwrap_err().kind(), io::ErrorKind::InvalidData),
                 2 => assert!(matches!(
                     result.unwrap_err().kind(),
@@ -385,7 +385,10 @@ mod tests {
         let error =
             request(&socket, &serde_json::json!({"id":"hash"}), Some(&options)).unwrap_err();
         server.join().unwrap();
-        assert!(is_partial(&error));
+        assert!(
+            is_partial(&error),
+            "Export failed before integrity check: {error:?}"
+        );
         assert!(!options.output.exists());
         assert_eq!(std::fs::read_dir(output_directory).unwrap().count(), 0);
     }
@@ -436,7 +439,7 @@ mod tests {
                 export.then_some(&options),
             );
             server.join().unwrap();
-            assert_eq!(response.is_ok(), valid);
+            assert_eq!(response.is_ok(), valid, "Unexpected response: {response:?}");
             assert!(!options.output.exists());
         }
     }
